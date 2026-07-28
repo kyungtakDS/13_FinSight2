@@ -7,3 +7,11 @@ tsconfig.tsbuildinfo
 # phase execution outputs
 phases/**/phase*-output.json
 phases/**/step*-output.json
+
+# environment variables
+.env
+.env.local
+.env.*.local
+
+# claude code worktrees
+.claude/worktrees/
