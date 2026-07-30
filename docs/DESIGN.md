@@ -163,7 +163,9 @@ const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains' }
 
 `Button` 스펙: `min-height 44px`, `--radius-pill`, gap `--space-xs`, primary 패딩 `10px 20px`(lg `14px 28px`), secondary는 `inset 0 0 0 1px var(--color-hairline)`, tertiary는 배경 없음. `href`가 있으면 `<a>`, 없으면 `<button>`.
 
-`ColorBlock`: 패딩 `--space-xxl`, 라운드 `--radius-lg`. 잉크는 **반드시 `--color-block-ink`**(navy만 `--color-block-ink-inverse`)를 쓴다. **`--color-ink`/`--color-inverse-ink`를 쓰지 마라. 이유: 그 둘은 다크 테마에서 반전되는데 블록의 파스텔 배경은 반전되지 않아, 다크 모드에서 lime 위 흰 글씨(대비 1.5:1)가 된다.**
+`ColorBlock`: 패딩 `--space-xxl`, 라운드 `--radius-lg`. 잉크는 **반드시 `--color-block-ink`**(navy만 `--color-block-ink-inverse`)를 쓴다.
+
+**규칙: 배경이 다크에서 반전되지 않는 면 위에는 반전되는 잉크 토큰(`--color-ink`·`--color-inverse-ink`)을 쓰지 마라.** 배경과 잉크는 반드시 같이 뒤집히거나 같이 고정돼야 한다. 이 짝이 어긋나면 다크 모드에서 lime 위 흰 글씨(대비 1.1:1)가 된다. 해당되는 곳: `ColorBlock` 7종 전부, `IconButton`의 `inverse`(배경이 고정 `--icon-inverse-surface`다). 반대로 `MarqueeStrip`은 배경·잉크가 **함께** 반전되므로 `--color-inverse-*`가 맞다 — 다크에서 검은 띠가 흰 띠로 뒤집히는 것이 의도다.
 
 **뷰포트당 color-block은 최대 1개**이고 블록 사이에는 항상 흰 캔버스가 온다.
 
@@ -248,4 +250,4 @@ nav(브랜드·링크 3개·테마 토글·로그인·무료로 시작하기) �
 
 **프로토타입은 시각 참조이지 구현 참조가 아니다.** `data.js`는 목 데이터이고, 산술은 프로덕션에서 서버 TypeScript가 한다(ADR-004).
 
-**알려진 편차 1건** — `prototype/ds-bundle.js`의 `ColorBlock`은 아직 잉크로 `--color-ink`/`--color-inverse-ink`를 읽는다. 그래서 **프로토타입을 다크 모드로 보면 파스텔 블록의 텍스트가 반전돼 읽히지 않는다.** 이것은 프로토타입 번들의 버그이고, 토큰(`--color-block-ink`)과 프로덕션 규칙(§4)이 정답이다. 랜딩을 구현할 때 이 번들의 다크 모드 렌더를 따라 하지 마라.
+color-block 대비는 라이트/다크가 동일하다 — lime 16.9:1 · navy 15.7:1 · coral 12.4:1 (WCAG AAA 기준 7:1). 이 값이 무너지면 `ColorBlock`이 `--color-block-ink` 대신 `--color-ink`를 읽고 있는 것이다.
