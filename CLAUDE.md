@@ -1,7 +1,7 @@
 # 프로젝트: FinSight2
 
-카드사 CSV 명세서를 올리면 Claude가 지출을 분류하고 정기구독을 찾아 인사이트를 주는 웹앱.
-전체 기획·시나리오는 루트 `plan.md` 참조 (이 파일에는 주입되지 않는다 — 필요하면 직접 읽어라).
+카드사 CSV 명세서를 올리면 Claude가 사업 경비 후보를 분류해, 세무사에게 그대로 넘길 정리본을 만들어 주는 웹앱.
+전체 기획·아키텍처·설계 근거는 `docs/` (PRD · ARCHITECTURE · ADR · DESIGN)에 있다.
 
 ## 기술 스택
 - Next.js (App Router) / TypeScript strict mode / Tailwind CSS
@@ -15,12 +15,12 @@
 - CRITICAL: **service role 키를 클라이언트로 내보내지 마라.** service role 헬퍼는 `userId`를 **필수 첫 인자**로 받는 시그니처여야 한다 — 규율이 아니라 타입으로 막는다.
 - CRITICAL: **mock-first.** 어떤 step도 "API 키가 없다"는 이유로 `blocked` 처리하지 마라. 외부 호출은 `src/services/`·`src/lib/supabase/` 뒤로 격리하고 테스트는 SDK를 mock한다. **테스트가 외부 키를 요구하면 안 된다** — Stop 훅이 매 세션 종료마다 `lint && build && test`를 돌리므로 키를 요구하는 순간 모든 step이 연쇄 실패한다.
 - CRITICAL: **환경변수 검증은 lazy.** 모듈 최상단에서 `process.env`를 읽고 throw하지 마라. `next build`가 페이지를 프리렌더하므로 빌드가 깨진다.
-- CRITICAL: **거래 원문 행을 DB에 저장하지 마라.** `analyses.summary`(집계 결과)만 저장한다. 원본 CSV는 비공개 Storage 버킷에만 둔다.
-- CRITICAL: **합계·구성비·추이를 Claude에게 계산시키지 마라.** 모델 출력은 *행별 카테고리 · 구독 후보 · 인사이트*까지고, 산술은 서버 TypeScript가 원본 금액으로 한다.
+- CRITICAL: **카드번호·승인번호는 정규화 단계에서 제거하고 저장하지 마라** — 스키마에 컬럼 자체를 두지 않는다. 정규화된 거래 행은 `transactions`에 저장한다(ADR-015). 원본 CSV는 비공개 Storage 버킷에만 두고 90일 후 파기한다.
+- CRITICAL: **합계·구성비·절세 추정액을 Claude에게 계산시키지 마라.** 모델 출력은 *거래별 계정과목 · 경비 판정 · 근거 한 줄*까지고, 산술은 서버 TypeScript가 원본 금액으로 한다.
 - CRITICAL: **로그에 PII를 남기지 마라.** 가맹점명·카드번호·CSV 내용·웹훅 원문 body 금지. 실패 시 에러 코드와 행 수만 남긴다.
 - 컴포넌트는 `src/components/`, 타입은 `src/types/`, 순수 로직은 `src/lib/`, 외부 SDK 래퍼는 `src/services/`.
-- 차트·결과 컴포넌트는 **데이터를 props로 받는다.** 데이터 페칭은 페이지가 한다 — `/demo`가 픽스처로 같은 컴포넌트를 렌더해야 하기 때문이다.
-- 클라이언트로 나가는 에러는 **고정 어휘**만: `parse_failed`·`too_large`·`refused`·`upstream`·`schema_mismatch`·`truncated`·`expired`. 예외 메시지·SQL 에러를 그대로 실어 보내지 마라.
+- 차트·결과 컴포넌트는 **데이터를 props로 받는다.** 데이터 페칭은 페이지가 한다 — 같은 컴포넌트를 무료(부분 데이터)와 유료(전체 데이터)로 렌더해야 하고, 테스트가 픽스처로 렌더해야 하기 때문이다.
+- 클라이언트로 나가는 에러는 **고정 어휘**만: `parse_failed`·`too_large`·`duplicate_file`·`analysis_failed`·`upstream`·`expired`·`payment_required`. 예외 메시지·SQL 에러를 그대로 실어 보내지 마라.
 
 ## 개발 프로세스
 
