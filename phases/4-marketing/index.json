@@ -1,0 +1,9 @@
+{
+  "project": "FinSight2",
+  "phase": "4-marketing",
+  "steps": [
+    { "step": 0, "name": "marketing-components", "status": "pending" },
+    { "step": 1, "name": "landing", "status": "pending" },
+    { "step": 2, "name": "legal", "status": "pending" }
+  ]
+}

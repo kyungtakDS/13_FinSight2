@@ -1,0 +1,13 @@
+{
+  "project": "FinSight2",
+  "phase": "1-pipeline",
+  "steps": [
+    { "step": 0, "name": "csv-normalize", "status": "pending" },
+    { "step": 1, "name": "csv-fingerprint", "status": "pending" },
+    { "step": 2, "name": "claude-client", "status": "pending" },
+    { "step": 3, "name": "map-columns", "status": "pending" },
+    { "step": 4, "name": "merchant-dictionary", "status": "pending" },
+    { "step": 5, "name": "classify-merchants", "status": "pending" },
+    { "step": 6, "name": "aggregate", "status": "pending" }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "project": "FinSight2",
+  "phase": "2-api",
+  "steps": [
+    { "step": 0, "name": "gate", "status": "pending" },
+    { "step": 1, "name": "analysis-pipeline", "status": "pending" },
+    { "step": 2, "name": "uploads-ingest", "status": "pending" },
+    { "step": 3, "name": "uploads-detail", "status": "pending" },
+    { "step": 4, "name": "uploads-retry", "status": "pending" },
+    { "step": 5, "name": "uploads-export", "status": "pending" }
+  ]
+}
