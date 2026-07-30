@@ -226,6 +226,40 @@ class StepExecutor:
             f"   {commit_example}\n\n---\n\n"
         )
 
+    # --- 훅 주입 ---
+
+    @staticmethod
+    def _toml(value) -> str:
+        """JSON 값을 TOML 인라인 표기로 바꾼다 (`-c key=value` 의 value 는 TOML 로 파싱된다)."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        if isinstance(value, list):
+            return "[" + ",".join(StepExecutor._toml(v) for v in value) + "]"
+        if isinstance(value, dict):
+            return "{" + ",".join(f"{k}={StepExecutor._toml(v)}" for k, v in value.items()) + "}"
+        raise TypeError(f"TOML 로 바꿀 수 없는 값: {value!r}")
+
+    def _hook_overrides(self) -> list:
+        """.codex/hooks.json 을 세션 설정 오버라이드로 바꾼다.
+
+        codex 0.145 는 <repo>/.codex/hooks.json 을 탐색하지 않는다 — user(~/.codex/hooks.json)·
+        plugin·managed·sessionFlags 만 훑는다 (`hooks/list` 로 확인). 레포에 훅을 두면서
+        전역 설정을 건드리지 않으려면 실행할 때마다 sessionFlags 로 주입하는 수밖에 없다.
+        주입된 훅도 trust 는 안 된 상태라 --dangerously-bypass-hook-trust 가 함께 필요하다.
+        """
+        hooks_file = ROOT / ".codex" / "hooks.json"
+        if not hooks_file.exists():
+            return []
+
+        args = []
+        for event, groups in self._read_json(hooks_file).get("hooks", {}).items():
+            args += ["-c", f"hooks.{event}={self._toml(groups)}"]
+        return args
+
     # --- Codex 호출 ---
 
     def _invoke_codex(self, step: dict, preamble: str) -> dict:
@@ -242,6 +276,7 @@ class StepExecutor:
         prompt = preamble + step_file.read_text()
         result = subprocess.run(
             ["codex", "exec",
+             *self._hook_overrides(),
              "--dangerously-bypass-approvals-and-sandbox",
              "--dangerously-bypass-hook-trust",
              "--json", "-"],

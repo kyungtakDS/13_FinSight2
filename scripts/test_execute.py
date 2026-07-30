@@ -420,6 +420,61 @@ class TestCommitStep:
 
 
 # ---------------------------------------------------------------------------
+# _hook_overrides
+# ---------------------------------------------------------------------------
+
+HOOKS_FIXTURE = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash|shell",
+                "hooks": [{"type": "command", "command": "node scripts/hooks/bash-guard.mjs", "timeout": 10}],
+            }
+        ],
+        "Stop": [{"hooks": [{"type": "command", "command": "npm run lint", "timeout": 900}]}],
+    }
+}
+
+
+class TestHookOverrides:
+    """codex 0.145 는 <repo>/.codex/hooks.json 을 탐색하지 않는다 (user·plugin·managed·
+    sessionFlags 만 훑는다). 그래서 하네스가 세션 설정 오버라이드로 직접 주입한다."""
+
+    def _write_hooks(self, tmp_project, data=HOOKS_FIXTURE):
+        d = tmp_project / ".codex"
+        d.mkdir(exist_ok=True)
+        (d / "hooks.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_one_override_per_event(self, executor, tmp_project):
+        self._write_hooks(tmp_project)
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        assert args.count("-c") == 2
+        assert any(a.startswith("hooks.PreToolUse=") for a in args)
+        assert any(a.startswith("hooks.Stop=") for a in args)
+
+    def test_value_is_toml_codex_accepts(self, executor, tmp_project):
+        self._write_hooks(tmp_project)
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        pre = next(a for a in args if a.startswith("hooks.PreToolUse="))
+        assert pre == (
+            'hooks.PreToolUse=[{matcher="Bash|shell",hooks=[{type="command",'
+            'command="node scripts/hooks/bash-guard.mjs",timeout=10}]}]'
+        )
+
+    def test_no_hooks_file_no_overrides(self, executor, tmp_project):
+        with patch.object(ex, "ROOT", tmp_project):
+            assert executor._hook_overrides() == []
+
+    def test_backslashes_and_quotes_are_escaped(self, executor, tmp_project):
+        self._write_hooks(tmp_project, {"hooks": {"Stop": [{"hooks": [{"command": 'a\\b"c'}]}]}})
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        assert args[1] == 'hooks.Stop=[{hooks=[{command="a\\\\b\\"c"}]}]'
+
+
+# ---------------------------------------------------------------------------
 # _invoke_codex (mocked)
 # ---------------------------------------------------------------------------
 
@@ -439,6 +494,21 @@ class TestInvokeCodex:
         assert "--dangerously-bypass-hook-trust" in cmd
         assert "--json" in cmd
         assert cmd[-1] == "-"  # 프롬프트는 stdin 으로 넘긴다
+
+    def test_hook_overrides_are_injected(self, executor, tmp_project):
+        """훅은 파일로는 안 잡히므로 매 실행마다 -c 로 주입되어야 한다."""
+        d = tmp_project / ".codex"
+        d.mkdir(exist_ok=True)
+        (d / "hooks.json").write_text(json.dumps(HOOKS_FIXTURE), encoding="utf-8")
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+
+        with patch.object(ex, "ROOT", tmp_project):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                executor._invoke_codex({"step": 2, "name": "ui"}, "preamble")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1] == "exec"  # -c 는 서브커맨드 뒤에 와야 한다
+        assert any(a.startswith("hooks.PreToolUse=") for a in cmd)
 
     def test_prompt_goes_through_stdin_not_argv(self, executor):
         """가드레일(AGENTS.md + docs/*.md)만 45,000자가 넘는다.

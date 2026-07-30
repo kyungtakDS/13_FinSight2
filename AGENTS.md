@@ -53,6 +53,7 @@ python scripts/execute.py <phase-dir> --push   # 실행 후 push
 - 가드레일 주입: 이 파일(AGENTS.md) + `docs/*.md` 전문을 매 step 프롬프트 앞에 붙인다.
 - 프롬프트는 argv 가 아니라 **stdin** 으로 넘어간다 — 가드레일만 45,000자가 넘어 Windows 인자 한도(32767자)를 초과한다.
 - step 상태(`completed`/`error`/`blocked`)는 `phases/{phase}/index.json`에 직접 기록한다.
+- 훅 주입: `.codex/hooks.json` 을 읽어 `-c hooks.<Event>=...` 로 넘긴다 (아래 「훅」 참고).
 
 ## 훅
 
@@ -72,8 +73,23 @@ node scripts/hooks/tdd-guard.test.mjs
 node scripts/hooks/bash-guard.test.mjs
 ```
 
-프로젝트 훅은 신뢰(trust)를 받아야 실행된다. 대화형 세션에서 `/hooks`로 한 번 승인하거나,
-하네스처럼 무인 실행할 때는 `--dangerously-bypass-hook-trust`를 붙인다 (`execute.py`가 이미 붙인다).
+### 이 파일은 Codex 가 자동으로 읽지 않는다
+
+codex 0.145.0 은 `<repo>/.codex/hooks.json` 을 **탐색하지 않는다**. 훅을 찾는 곳은
+`~/.codex/hooks.json`(user) · 플러그인 · managed · sessionFlags(`-c hooks....`) 뿐이다.
+(`app-server` 의 `hooks/list` 로 확인했다. 잘못된 위치에 두면 에러도 경고도 없이 그냥 조용하다.)
+
+그래서 `scripts/execute.py` 가 매 step 실행마다 이 파일을 읽어 `-c hooks.<Event>=<TOML>` 로
+주입한다. 레포에 훅을 두면서 사용자 전역 설정을 건드리지 않는 유일한 방법이다.
+주입된 훅도 `trustStatus` 는 `untrusted` 라 `--dangerously-bypass-hook-trust` 가 함께 필요하다
+(execute.py 가 이미 붙인다). 하네스로 돌릴 때는 아무것도 안 해도 훅이 작동한다.
+
+대화형 `codex` 세션에도 적용하고 싶으면 이 파일 내용을 `~/.codex/hooks.json` 에 복사하고
+`/hooks` 에서 trust 를 준다. 단 그건 **모든 프로젝트에 전역으로** 걸리므로,
+`command` 를 절대경로로 바꾸고 다른 레포에서는 no-op 이 되게 만들어야 한다.
+
+형식 주의: 타임아웃 키는 `timeout`(초)다. `timeoutSec` 로 쓰면 조용히 무시되고 기본값 600 이 된다.
+모르는 키는 에러 없이 버려지므로 오타는 티가 안 난다.
 
 ## 환경
 - Windows. Node v24.15.0 / npm 11.12.1
