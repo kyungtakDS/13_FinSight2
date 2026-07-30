@@ -11,6 +11,11 @@ if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
+# Windows에서는 백슬래시 경로가 넘어온다. 아래 면제 패턴은 전부 '/' 기준이라
+# 정규화하지 않으면 */types/* · */page.tsx · */layout.tsx 같은 면제가 통째로
+# 죽고, 프레임워크 파일마다 테스트를 요구하게 된다.
+FILE_PATH=$(printf '%s' "$FILE_PATH" | tr '\\' '/')
+
 # 테스트 파일 자체를 수정하는 건 허용
 case "$FILE_PATH" in
   *test*|*spec*|*.test.*|*.spec.*|*__tests__*)
