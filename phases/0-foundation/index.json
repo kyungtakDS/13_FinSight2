@@ -2,11 +2,38 @@
   "project": "FinSight2",
   "phase": "0-foundation",
   "steps": [
-    { "step": 0, "name": "project-setup", "status": "pending" },
-    { "step": 1, "name": "design-tokens", "status": "pending" },
-    { "step": 2, "name": "core-types", "status": "pending" },
-    { "step": 3, "name": "db-schema", "status": "pending" },
-    { "step": 4, "name": "supabase-clients", "status": "pending" },
-    { "step": 5, "name": "auth-flow", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "project-setup",
+      "status": "completed",
+      "started_at": "2026-07-31T08:53:36+0900",
+      "summary": "Next.js App Router + TypeScript strict + Tailwind v4 + ESLint 9 + Vitest 스캐폴딩. dev/build/lint/test 스크립트와 @/* alias, supabase 테스트 include 구성."
+    },
+    {
+      "step": 1,
+      "name": "design-tokens",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "core-types",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "db-schema",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "supabase-clients",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "auth-flow",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-07-31T08:53:36+0900"
 }
