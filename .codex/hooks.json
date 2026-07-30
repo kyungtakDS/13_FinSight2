@@ -1,0 +1,41 @@
+{
+  "description": "FinSight2 가드레일 — 위험 명령어 차단 · TDD 가드 · 세션 종료 시 lint/build/test.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/bash-guard.mjs",
+            "statusMessage": "위험 명령어 검사",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/tdd-guard.mjs",
+            "statusMessage": "TDD 가드 검사",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npm run lint && npm run build && npm run test",
+            "statusMessage": "lint · build · test",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

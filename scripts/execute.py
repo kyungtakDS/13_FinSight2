@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Harness Step Executor — phase 내 step을 순차 실행하고 자가 교정한다.
+Harness Step Executor — phase 내 step을 Codex CLI로 순차 실행하고 자가 교정한다.
 
 Usage:
     python3 scripts/execute.py <phase-dir> [--push]
+
+요구사항: `codex` CLI 가 PATH 에 있고 로그인되어 있어야 한다 (`codex login`).
 """
 
 import argparse
@@ -176,9 +178,9 @@ class StepExecutor:
 
     def _load_guardrails(self) -> str:
         sections = []
-        claude_md = ROOT / "CLAUDE.md"
-        if claude_md.exists():
-            sections.append(f"## 프로젝트 규칙 (CLAUDE.md)\n\n{claude_md.read_text()}")
+        agents_md = ROOT / "AGENTS.md"
+        if agents_md.exists():
+            sections.append(f"## 프로젝트 규칙 (AGENTS.md)\n\n{agents_md.read_text()}")
         docs_dir = ROOT / "docs"
         if docs_dir.is_dir():
             for doc in sorted(docs_dir.glob("*.md")):
@@ -224,9 +226,9 @@ class StepExecutor:
             f"   {commit_example}\n\n---\n\n"
         )
 
-    # --- Claude 호출 ---
+    # --- Codex 호출 ---
 
-    def _invoke_claude(self, step: dict, preamble: str) -> dict:
+    def _invoke_codex(self, step: dict, preamble: str) -> dict:
         step_num, step_name = step["step"], step["name"]
         step_file = self._phase_dir / f"step{step_num}.md"
 
@@ -234,14 +236,21 @@ class StepExecutor:
             print(f"  ERROR: {step_file} not found")
             sys.exit(1)
 
+        # 프롬프트는 argv 가 아니라 stdin("-")으로 넘긴다.
+        # 가드레일(AGENTS.md + docs/*.md)만 45,000자가 넘어 Windows CreateProcess
+        # 인자 한도(32767자)를 초과한다. argv 로 넘기면 WinError 206 으로 죽는다.
         prompt = preamble + step_file.read_text()
         result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
+            ["codex", "exec",
+             "--dangerously-bypass-approvals-and-sandbox",
+             "--dangerously-bypass-hook-trust",
+             "--json", "-"],
+            input=prompt,
             cwd=self._root, capture_output=True, text=True, timeout=1800,
         )
 
         if result.returncode != 0:
-            print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
+            print(f"\n  WARN: Codex가 비정상 종료됨 (code {result.returncode})")
             if result.stderr:
                 print(f"  stderr: {result.stderr[:500]}")
 
@@ -306,7 +315,7 @@ class StepExecutor:
                 tag += f" [retry {attempt}/{self.MAX_RETRIES}]"
 
             with progress_indicator(tag) as pi:
-                self._invoke_claude(step, preamble)
+                self._invoke_codex(step, preamble)
                 elapsed = int(pi.elapsed)
 
             index = self._read_json(self._index_file)
