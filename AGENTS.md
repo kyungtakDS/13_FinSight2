@@ -58,20 +58,25 @@ python scripts/execute.py <phase-dir> --push   # 실행 후 push
 ## 훅
 
 `.codex/hooks.json`에 세 개가 걸려 있고, 구현은 `scripts/hooks/*.mjs`다.
-bash가 아니라 node인 이유: Codex는 훅을 cmd.exe로 실행하는데 Windows PATH에 bash가 없다.
+bash가 아니라 node인 이유: 이 환경의 Windows PATH에 bash가 없다 (node는 이미 필수 의존성이다).
 
 | 이벤트 | 훅 | 하는 일 |
 |--------|----|---------|
 | `PreToolUse` (`Bash`·`shell`) | `bash-guard.mjs` | `rm -rf` · force push · `git reset --hard` · `DROP TABLE` 차단 |
 | `PreToolUse` (`apply_patch`·`Edit`·`Write`) | `tdd-guard.mjs` | 테스트 없는 구현 파일 작성 차단 |
-| `Stop` | — | `npm run lint && npm run build && npm run test` |
+| `Stop` | `stop-check.mjs` | `npm run lint` → `build` → `test` 를 차례로 돌리고, 실패하면 stderr 로 원인 보고 |
 
 훅을 고치면 회귀 테스트를 돌려라:
 
 ```
 node scripts/hooks/tdd-guard.test.mjs
 node scripts/hooks/bash-guard.test.mjs
+node scripts/hooks/stop-check.test.mjs
 ```
+
+**훅의 stdout 은 JSON 이거나 비어 있어야 한다.** 아무 텍스트나 stdout 으로 내보내면 Codex 가
+그 훅을 `Failed` 로 잡는다 — 명령이 성공했든 아니든. 그래서 Stop 훅은 `npm ...` 을 직접
+부르지 않고 `stop-check.mjs` 로 감싸 출력을 삼킨다. 새 훅을 붙일 때도 같은 규칙을 지켜라.
 
 ### 이 파일은 Codex 가 자동으로 읽지 않는다
 

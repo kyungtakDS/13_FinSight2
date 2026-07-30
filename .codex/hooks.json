@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npm run lint && npm run build && npm run test",
+            "command": "node scripts/hooks/stop-check.mjs",
             "statusMessage": "lint · build · test",
             "timeout": 900
           }
