@@ -24,12 +24,12 @@ import execute as ex
 
 @pytest.fixture
 def tmp_project(tmp_path):
-    """phases/, CLAUDE.md, docs/ 를 갖춘 임시 프로젝트 구조."""
+    """phases/, AGENTS.md, docs/ 를 갖춘 임시 프로젝트 구조."""
     phases_dir = tmp_path / "phases"
     phases_dir.mkdir()
 
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text("# Rules\n- rule one\n- rule two")
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text("# Rules\n- rule one\n- rule two")
 
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -146,7 +146,7 @@ class TestJsonHelpers:
 # ---------------------------------------------------------------------------
 
 class TestLoadGuardrails:
-    def test_loads_claude_md_and_docs(self, executor, tmp_project):
+    def test_loads_agents_md_and_docs(self, executor, tmp_project):
         with patch.object(ex, "ROOT", tmp_project):
             result = executor._load_guardrails()
         assert "# Rules" in result
@@ -166,11 +166,11 @@ class TestLoadGuardrails:
         guide_pos = result.index("guide")
         assert arch_pos < guide_pos
 
-    def test_no_claude_md(self, executor, tmp_project):
-        (tmp_project / "CLAUDE.md").unlink()
+    def test_no_agents_md(self, executor, tmp_project):
+        (tmp_project / "AGENTS.md").unlink()
         with patch.object(ex, "ROOT", tmp_project):
             result = executor._load_guardrails()
-        assert "CLAUDE.md" not in result
+        assert "AGENTS.md" not in result
         assert "Architecture" in result
 
     def test_no_docs_dir(self, executor, tmp_project):
@@ -420,32 +420,117 @@ class TestCommitStep:
 
 
 # ---------------------------------------------------------------------------
-# _invoke_claude (mocked)
+# _hook_overrides
 # ---------------------------------------------------------------------------
 
-class TestInvokeClaude:
-    def test_invokes_claude_with_correct_args(self, executor):
+HOOKS_FIXTURE = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash|shell",
+                "hooks": [{"type": "command", "command": "node scripts/hooks/bash-guard.mjs", "timeout": 10}],
+            }
+        ],
+        "Stop": [{"hooks": [{"type": "command", "command": "npm run lint", "timeout": 900}]}],
+    }
+}
+
+
+class TestHookOverrides:
+    """codex 0.145 는 <repo>/.codex/hooks.json 을 탐색하지 않는다 (user·plugin·managed·
+    sessionFlags 만 훑는다). 그래서 하네스가 세션 설정 오버라이드로 직접 주입한다."""
+
+    def _write_hooks(self, tmp_project, data=HOOKS_FIXTURE):
+        d = tmp_project / ".codex"
+        d.mkdir(exist_ok=True)
+        (d / "hooks.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_one_override_per_event(self, executor, tmp_project):
+        self._write_hooks(tmp_project)
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        assert args.count("-c") == 2
+        assert any(a.startswith("hooks.PreToolUse=") for a in args)
+        assert any(a.startswith("hooks.Stop=") for a in args)
+
+    def test_value_is_toml_codex_accepts(self, executor, tmp_project):
+        self._write_hooks(tmp_project)
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        pre = next(a for a in args if a.startswith("hooks.PreToolUse="))
+        assert pre == (
+            'hooks.PreToolUse=[{matcher="Bash|shell",hooks=[{type="command",'
+            'command="node scripts/hooks/bash-guard.mjs",timeout=10}]}]'
+        )
+
+    def test_no_hooks_file_no_overrides(self, executor, tmp_project):
+        with patch.object(ex, "ROOT", tmp_project):
+            assert executor._hook_overrides() == []
+
+    def test_backslashes_and_quotes_are_escaped(self, executor, tmp_project):
+        self._write_hooks(tmp_project, {"hooks": {"Stop": [{"hooks": [{"command": 'a\\b"c'}]}]}})
+        with patch.object(ex, "ROOT", tmp_project):
+            args = executor._hook_overrides()
+        assert args[1] == 'hooks.Stop=[{hooks=[{command="a\\\\b\\"c"}]}]'
+
+
+# ---------------------------------------------------------------------------
+# _invoke_codex (mocked)
+# ---------------------------------------------------------------------------
+
+class TestInvokeCodex:
+    def test_invokes_codex_with_correct_args(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"result": "ok"}', stderr="")
         step = {"step": 2, "name": "ui"}
         preamble = "PREAMBLE\n"
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            output = executor._invoke_claude(step, preamble)
+            executor._invoke_codex(step, preamble)
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "claude"
-        assert "-p" in cmd
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--output-format" in cmd
-        assert "PREAMBLE" in cmd[-1]
-        assert "UI를 구현하세요" in cmd[-1]
+        assert cmd[0] == "codex"
+        assert cmd[1] == "exec"
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--dangerously-bypass-hook-trust" in cmd
+        assert "--json" in cmd
+        assert cmd[-1] == "-"  # 프롬프트는 stdin 으로 넘긴다
+
+    def test_hook_overrides_are_injected(self, executor, tmp_project):
+        """훅은 파일로는 안 잡히므로 매 실행마다 -c 로 주입되어야 한다."""
+        d = tmp_project / ".codex"
+        d.mkdir(exist_ok=True)
+        (d / "hooks.json").write_text(json.dumps(HOOKS_FIXTURE), encoding="utf-8")
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+
+        with patch.object(ex, "ROOT", tmp_project):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                executor._invoke_codex({"step": 2, "name": "ui"}, "preamble")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1] == "exec"  # -c 는 서브커맨드 뒤에 와야 한다
+        assert any(a.startswith("hooks.PreToolUse=") for a in cmd)
+
+    def test_prompt_goes_through_stdin_not_argv(self, executor):
+        """가드레일(AGENTS.md + docs/*.md)만 45,000자가 넘는다.
+        argv 로 넘기면 Windows CreateProcess 인자 한도(32767자)에 걸려 WinError 206 으로 죽는다."""
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        step = {"step": 2, "name": "ui"}
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_codex(step, "PREAMBLE\n")
+
+        cmd = mock_run.call_args[0][0]
+        stdin_text = mock_run.call_args[1]["input"]
+        assert "PREAMBLE" in stdin_text
+        assert "UI를 구현하세요" in stdin_text
+        assert not any("PREAMBLE" in arg for arg in cmd)
 
     def test_saves_output_json(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
         step = {"step": 2, "name": "ui"}
 
         with patch("subprocess.run", return_value=mock_result):
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
 
         output_file = executor._phase_dir / "step2-output.json"
         assert output_file.exists()
@@ -457,7 +542,7 @@ class TestInvokeClaude:
     def test_nonexistent_step_file_exits(self, executor):
         step = {"step": 99, "name": "nonexistent"}
         with pytest.raises(SystemExit) as exc_info:
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
         assert exc_info.value.code == 1
 
     def test_timeout_is_1800(self, executor):
@@ -465,7 +550,7 @@ class TestInvokeClaude:
         step = {"step": 2, "name": "ui"}
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
 
         assert mock_run.call_args[1]["timeout"] == 1800
 
