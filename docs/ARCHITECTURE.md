@@ -3,6 +3,10 @@
 ## 디렉토리 구조
 
 ```
+design/                                    (디자인 소스 오브 트루스. 빌드 대상 아님 — DESIGN.md)
+├── tokens/*.css · theme.css · styles.css
+└── prototype/                             (참조용 실행 가능 프로토타입)
+
 src/
 ├── app/
 │   ├── api/uploads/route.ts               + route.test.ts   (접수 + after(), 목록)
@@ -15,6 +19,7 @@ src/
 │   └── (페이지 — tdd-guard 면제)
 ├── middleware.ts                          + middleware.test.ts   ← 면제 아님
 ├── components/                            (차트·리포트·업로드 위젯. 데이터는 props로만)
+├── styles/                                (design/에서 복사한 토큰 · theme. globals.css가 @import)
 ├── lib/
 │   ├── supabase/{client,server,service}.ts
 │   ├── csv/normalize.ts        (인코딩 감지 · 헤더 행 탐지 · 금액 파싱 · 취소 부호 보존)

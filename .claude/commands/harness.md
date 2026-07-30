@@ -94,6 +94,7 @@
 
 - `/docs/ARCHITECTURE.md`
 - `/docs/ADR.md`
+- {UI를 만드는 step이면 `/docs/DESIGN.md` + 참조할 `design/` 하위 경로}
 - {이전 step에서 생성/수정된 파일 경로}
 
 이전 step에서 만들어진 코드를 꼼꼼히 읽고, 설계 의도를 이해한 뒤 작업하라.
@@ -118,6 +119,8 @@ npm test        # 테스트 통과
    - ARCHITECTURE.md 디렉토리 구조를 따르는가?
    - ADR 기술 스택을 벗어나지 않았는가?
    - CLAUDE.md CRITICAL 규칙을 위반하지 않았는가?
+   - UI를 만들었다면 DESIGN.md를 따르는가? — raw hex·raw px 없음, 토큰 weight 집합만 사용,
+     새 라우트 없음, 빈/잠김/실패 상태 구현됨
 3. 결과에 따라 `phases/{task-name}/index.json`의 해당 step을 업데이트한다:
    - 성공 → `"status": "completed"`, `"summary": "산출물 한 줄 요약"`
    - 수정 3회 시도 후에도 실패 → `"status": "error"`, `"error_message": "구체적 에러 내용"`
