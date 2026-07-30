@@ -1,0 +1,6 @@
+/* FinSight2 web fonts.
+   SUBSTITUTION: the brand spec calls for proprietary `figmaSans` / `figmaMono`.
+   Those binaries were not provided, so per the spec's own recommendation we
+   substitute Inter (fine variable weight axis) and JetBrains Mono. Swap these
+   @font-face URLs for the real font files when available. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500&display=swap');

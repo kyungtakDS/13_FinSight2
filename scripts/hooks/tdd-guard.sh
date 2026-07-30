@@ -32,6 +32,13 @@ case "$FILE_PATH" in
     ;;
 esac
 
+# design/prototype/ 은 벤더링된 디자인 참조 자산 — 빌드되지도 import되지도 않는다. 허용
+case "$FILE_PATH" in
+  */design/prototype/*)
+    exit 0
+    ;;
+esac
+
 # Next.js 프레임워크 파일은 허용 (layout, page, loading, error, not-found, global styles)
 case "$FILE_PATH" in
   */layout.tsx|*/layout.ts|*/page.tsx|*/page.ts|*/loading.tsx|*/error.tsx|*/not-found.tsx|*/globals.css)
