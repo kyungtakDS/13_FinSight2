@@ -129,7 +129,7 @@ function IconButton({
     },
     inverse: {
       background: 'var(--icon-inverse-surface)',
-      color: 'var(--color-inverse-ink)'
+      color: 'var(--color-block-ink-inverse)'
     }
   };
   const composed = {
@@ -563,31 +563,31 @@ try { (() => {
 const BLOCKS = {
   lime: {
     bg: 'var(--color-block-lime)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   lilac: {
     bg: 'var(--color-block-lilac)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   cream: {
     bg: 'var(--color-block-cream)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   mint: {
     bg: 'var(--color-block-mint)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   pink: {
     bg: 'var(--color-block-pink)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   coral: {
     bg: 'var(--color-block-coral)',
-    ink: 'var(--color-ink)'
+    ink: 'var(--color-block-ink)'
   },
   navy: {
     bg: 'var(--color-block-navy)',
-    ink: 'var(--color-inverse-ink)'
+    ink: 'var(--color-block-ink-inverse)'
   }
 };
 
