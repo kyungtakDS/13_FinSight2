@@ -56,7 +56,7 @@
       "status": "completed",
       "started_at": "2026-07-31T10:11:59+0900",
       "summary": "lib/report/aggregate.ts — aggregate(txns) → UploadSummary. 취소 상계, uncertain은 expenseTotal/estimatedSaving/accounts에서 제외하고 count·total로 별도 노출, 절감액은 floor(expenseTotal*0.066) 하한, accounts는 금액 내림차순, insights는 규칙 기반 결정적 전체 목록(절단은 gate 소관). 순수 함수. Phase 1 검토 지점: 실제 카드사 CSV 2~3개로 파싱 수동 검증 필요",
-      "completed_at": "2026-07-31T10:15:07+0900"
+      "completed_at": "2026-07-31T10:16:22+0900"
     }
   ],
   "created_at": "2026-07-31T09:48:20+0900"
