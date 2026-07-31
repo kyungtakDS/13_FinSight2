@@ -29,7 +29,10 @@
     {
       "step": 3,
       "name": "db-schema",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T09:08:44+0900",
+      "summary": "supabase/migrations 0001~0004: 테이블 6개·인덱스 4개·RLS(profiles/uploads/transactions)·csv-uploads 비공개 버킷({user_id}/ 접두사 정책)·pg_cron 90일 만료. migrations.test.ts 11항목. DB 적용은 미실시 — 사람이 콘솔에서 해야 함",
+      "completed_at": "2026-07-31T09:12:56+0900"
     },
     {
       "step": 4,
