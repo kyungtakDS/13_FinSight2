@@ -7,7 +7,8 @@
       "name": "project-setup",
       "status": "completed",
       "started_at": "2026-07-31T08:53:36+0900",
-      "summary": "Next.js App Router + TypeScript strict + Tailwind v4 + ESLint 9 + Vitest 스캐폴딩. dev/build/lint/test 스크립트와 @/* alias, supabase 테스트 include 구성."
+      "summary": "Next.js App Router + TypeScript strict + Tailwind v4 + ESLint 9 + Vitest 스캐폴딩. dev/build/lint/test 스크립트와 @/* alias, supabase 테스트 include 구성.",
+      "completed_at": "2026-07-31T09:00:10+0900"
     },
     {
       "step": 1,
