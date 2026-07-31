@@ -2,7 +2,8 @@
   "phases": [
     {
       "dir": "0-foundation",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-07-31T09:24:17+0900"
     },
     {
       "dir": "1-pipeline",
