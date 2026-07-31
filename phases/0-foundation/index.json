@@ -40,7 +40,7 @@
       "status": "completed",
       "started_at": "2026-07-31T09:13:56+0900",
       "summary": "lib/supabase/{client,server,service}.ts. service 헬퍼 6개 전부 userId 필수 첫 인자 + user_id 필터 강제, storagePathFor()가 {userId}/{uploadId}.csv 조립·접두사 검증. lazy env. SDK 전부 mock",
-      "completed_at": "2026-07-31T09:18:31+0900"
+      "completed_at": "2026-07-31T09:19:38+0900"
     },
     {
       "step": 5,
