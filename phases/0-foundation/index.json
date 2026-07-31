@@ -45,7 +45,10 @@
     {
       "step": 5,
       "name": "auth-flow",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T09:19:39+0900",
+      "summary": "middleware.ts로 /dashboard·/upgrade 보호(/auth/callback 통과), callback route의 code→세션 교환과 고정 리다이렉트, Google 로그인·로그아웃을 구현. /와 /dashboard는 자리표시 — Phase 3·4에서 대체",
+      "completed_at": "2026-07-31T09:23:00+0900"
     }
   ],
   "created_at": "2026-07-31T08:53:36+0900"
