@@ -24,7 +24,7 @@
       "status": "completed",
       "started_at": "2026-07-31T09:55:03+0900",
       "summary": "services/claude/client.ts — callStructured<T>(system, userData, zod schema, maxTokens). stop_reason 3분기를 content 접근 전에 수행(refusal/max_tokens/context_exceeded/schema/upstream). 스트리밍+finalMessage, system 캐싱, <user_data> 구분자, maxRetries:0, lazy env, 로깅 0회. SDK effort 파라미터의 실제 이름은 output_config.effort.",
-      "completed_at": "2026-07-31T09:59:07+0900"
+      "completed_at": "2026-07-31T10:00:09+0900"
     },
     {
       "step": 3,
