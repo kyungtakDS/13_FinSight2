@@ -18,7 +18,7 @@ python scripts/execute.py 0-foundation --push
 | Phase | dir | steps | 상태 | 무엇을 만드나 | 끝나면 확인 가능한 것 |
 |---|---|---|---|---|---|
 | 0 | `0-foundation` | 6 | **completed** (2026-07-31) | 스캐폴딩 · 디자인 토큰 · 타입 · DB 스키마 · Supabase 클라이언트 · 인증 | Google 로그인 후 빈 `/dashboard` 진입 |
-| 1 | `1-pipeline` | 7 | pending | CSV 정규화·지문 · Claude 호출 2곳 · 전역 사전 · 서버 집계 | 픽스처 CSV → 리포트 요약 객체 (전부 유닛테스트) |
+| 1 | `1-pipeline` | 7 | **completed** (2026-07-31) | CSV 정규화·지문 · Claude 호출 2곳 · 전역 사전 · 서버 집계 | 픽스처 CSV → 리포트 요약 객체 (전부 유닛테스트) |
 | 2 | `2-api` | 6 | pending | 게이트 · 분석 오케스트레이션 · uploads 라우트 5개 | curl로 업로드 → 폴링 → 리포트 JSON |
 | 3 | `3-app-ui` | 6 | pending | 앱 셸 · 업로드 화면 · 리포트 3상태 · 잠금 | 브라우저에서 업로드→리포트 전 과정 |
 | 4 | `4-marketing` | 3 | pending | 마케팅 컴포넌트 · 랜딩 · `/legal` | 랜딩 → 가입 진입 |
@@ -60,9 +60,48 @@ lazy env · 카드번호/승인번호 컬럼 부재 · 전역 사전 2개 테이
 파괴적 DDL 부재 · `src/middleware.test.ts` 선작성 · `src/__tests__/` 우회 부재 · raw hex/px/이모지 0건 ·
 `tailwind.config.*` 부재 및 `fonts.css` 미복사.
 
+### Phase 1 — 완료 (2026-07-31 09:48:20 → 10:16:23, 28분 03초)
+
+7개 step 전부 `completed`, **재시도 0회**. 브랜치 `feat-1-pipeline`(base `feat-0-foundation`).
+
+| # | name | 소요 | 산출물 |
+|---|---|---|---|
+| 0 | `csv-normalize` | 3m39s | UTF-8 strict 실패 시 cp949 · iconv-lite · BOM 제거 · papaparse · 취소 부호 보존 · 원본 `rowIndex` · 실패 행 skip 카운트 · 3,000행 상한 |
+| 1 | `csv-fingerprint` | 3m02s | `fileHash`(sha256) · `headerFingerprint`(상위 20행, 숫자→`#` 마스킹, 데이터 행은 셀 수만 기여) |
+| 2 | `claude-client` | 5m06s | `callStructured<T>`. `stop_reason` 3분기를 `content` 접근 **전에**. 스트리밍+`finalMessage`, system 캐싱, `maxRetries: 0` |
+| 3 | `map-columns` | 3m46s | LLM ①. 상위 20행만 전송, zod 뒤 인덱스 범위·중복 배정 검증, 폴백 휴리스틱 없음 |
+| 4 | `merchant-dictionary` | 3m53s | 전역 사전 조회/적재. 항목 단위 검증, 사전 쓰기의 **유일한 경로** |
+| 5 | `classify-merchants` | 4m09s | LLM ②. 상호명만 전송, 계정과목은 `ACCOUNT_CODES`에서 프롬프트 생성, 길이·인덱스 불일치는 실패(정렬 복원 안 함) |
+| 6 | `aggregate` | 4m23s | 서버 산술 전부. 취소 상계, `uncertain` 제외, `floor(expenseTotal × 0.066)` |
+
+**검증 결과** (하네스와 별개로 직접 실행):
+
+```
+npm run lint    exit 0
+npm run build   exit 0
+npm run test    exit 0 — 214 passed / 18 files  (Phase 1 이 158개 추가)
+```
+
+파일별 신규: `normalize` 34 · `aggregate` 29 · `dictionary` 26 · `classify-merchants` 22 ·
+`client` 17 · `map-columns` 16 · `fingerprint` 14.
+
+**감사 통과 항목**: 7개 모듈 전부 `console.*` 0회 · `lib/csv`·`lib/report`가 DB/네트워크/env 미참조(순수) ·
+`ESTIMATED_TAX_RATE = 0.066` + `Math.floor`(`round`/`ceil` 미사용) · 단정적 지시 문구 0건 ·
+`aggregate`가 인사이트를 자르지 않음 · 계정과목 한글명 프롬프트 하드코딩 0건 · sha256 전용 ·
+교차 파일 중복 판정(`is_duplicate`·거래 지문) 미구현 · 전역 사전에 사용자 식별자 미참조.
+
+**ADR-003 경계 — 구조로 막혔다**: `mapColumns(topRows: string[][])`와
+`classifyMerchants(names: string[])`가 각각 배열 하나만 받는다. 금액·날짜·카드번호·사용자 식별자를
+**인자로 받지 않으므로 실수로도 보낼 수 없다.** `userData`는 각각 상위 20행 CSV와
+`JSON.stringify(names)`뿐이다.
+
+**ADR-022 확인**: `model: "claude-opus-5"` · `output_config: { effort: "medium" }`.
+step 파일이 "SDK 파라미터 이름을 추측하지 마라"고 요구했고, `output_config`가
+`node_modules/@anthropic-ai/sdk`의 `.d.ts` 10곳에 실재함을 확인했다 — 지어낸 이름이 아니다.
+
 ---
 
-## 미해결 항목 (Phase 0 종료 시점)
+## 미해결 항목 (Phase 1 종료 시점)
 
 **blocker**는 해당 Phase를 **시작하기 전에** 처리해야 하는 것이고, **후속 작업**은 병렬로 진행해도
 Phase 진행을 막지 않는 것이다. 이 구분이 곧 "지금 Phase 1을 시작해도 되는가"의 답이다.
@@ -71,11 +110,56 @@ Phase 진행을 막지 않는 것이다. 이 구분이 곧 "지금 Phase 1을 �
 |---|---|---|---|---|
 | B-1 | `middleware` → `proxy` 전환 결정 | **blocker** | **Phase 2 시작 전** | Phase 2가 미들웨어를 다시 건드린다 |
 | B-2 | Supabase DB 마이그레이션 적용 · Google OAuth provider 설정 | **blocker (환경)** | Phase 3 검증 전 | 로그인·업로드를 브라우저로 확인할 수 없다 |
+| B-3 | **실제 카드사 CSV 2~3개로 파싱 검증** | **blocker (사람만 가능)** | **Phase 2 시작 전 권장** | 틀리면 Phase 2 이후가 전부 흔들린다 |
 | F-1 | `0004_expiry_cron.sql` 실제 동작 확인 | 후속 | B-2 완료 후 | 없음 (Phase 진행을 막지 않음) |
 | F-2 | `execute.py` 경과 시간 표시 버그 | 후속 | 아무 때나 | 없음 (표시만의 문제) |
+| F-3 | `tdd-guard.test.mjs` 픽스처 충돌 (3 fail) | 후속 | Phase 2 전 권장 | 없음 (가드 자체는 정상) |
 
-**Phase 1은 위 넷 중 어느 것에도 막히지 않는다.** Phase 1은 순수 로직과 mock뿐이라
-DB·OAuth·미들웨어와 무관하다(ADR-018). 지금 바로 실행할 수 있다.
+Phase 0·1은 위 항목들에 막히지 않고 완료됐다 — 순수 로직과 mock뿐이라
+DB·OAuth·미들웨어와 무관하다(ADR-018).
+
+### B-3. 실제 카드사 CSV 파싱 검증 — **미수행. 사람만 할 수 있다**
+
+D-9가 「Phase 1 후」 검토 지점으로 지정한 항목이다. **수행하지 못했고, 결과를 지어내지 않았다.**
+
+수행하지 못한 이유: 실제 카드사 명세서는 사용자의 개인 금융 문서다. 에이전트가 구할 수 없고,
+구해서도 안 되며, 레포에 커밋해서도 안 된다(step 파일이 명시적으로 금지한다).
+
+**대신 무엇이 검증됐나** — `src/lib/csv/normalize.test.ts`의 34개 테스트가 **손으로 만든 합성
+픽스처**로 위험 지점을 덮는다. 커밋된 `.csv` 파일은 0개이고 픽스처는 전부 테스트 코드 안의 인라인
+문자열이다:
+
+- 인코딩: UTF-8 · cp949 · BOM · ASCII 기본값
+- **cp949 확장 음절이 깨지지 않는 것** (`TextDecoder('euc-kr')`로는 깨지는 구간)
+- 가맹점명에 콤마가 든 따옴표 필드가 한 셀로 유지
+- 행마다 셀 수가 다른 상단 메타 블록
+- 헤더 위쪽 메타 무시 · 헤더 행 자체가 거래로 안 들어감
+- **취소 부호 보존** · 매핑되지 않은 컬럼 미판독 · 카드번호 패턴 제거
+- 실패 행 skip + 카운트, `rowIndex`는 원본 기준 유지
+- 3,000행 초과 시 `RowLimitExceeded`
+
+**합성 픽스처가 덮지 못하는 것**: 실제 카드사가 쓰는 *예상 밖의* 양식 — 상단 메타 블록의 실제 행 수,
+컬럼명의 실제 표기, 취소 거래의 실제 부호 관행, 파일 끝의 합계 행 유무. ADR-012가
+*"이 제품에서 가장 위험한 부분은 카드사 CSV 파싱"*이라고 한 지점이 정확히 여기다.
+
+**검증 방법** (레포에 파일을 넣지 말 것):
+
+```bash
+# 임시 스크립트로 로컬에서만. 결과 수치만 기록하고 파일과 스크립트는 커밋하지 않는다.
+npx tsx -e "
+  import { readFileSync } from 'node:fs';
+  import { detectEncoding, decodeCsv, parseRows } from './src/lib/csv/normalize';
+  const b = new Uint8Array(readFileSync(process.argv[1]));
+  const enc = detectEncoding(b);
+  const rows = parseRows(decodeCsv(b, enc));
+  console.log({ enc, rows: rows.length, head: rows.slice(0, 8).map(r => r.length) });
+" /경로/명세서.csv
+```
+
+확인할 것: ① 인코딩 판정이 맞는가 ② 한글이 안 깨지는가 ③ 헤더 행이 상위 20행 안에 있는가
+④ 취소 거래가 음수로 읽히는가. 카드사 2~3곳에서 각각 본다.
+
+**결과는 이 문서에 수치로만 기록한다** — 가맹점명·금액을 적지 마라.
 
 ### B-1. `middleware` → `proxy` 전환 결정 — Phase 2 시작 전
 
@@ -130,6 +214,42 @@ Storage 콘솔에서 객체가 실제로 사라졌는지 **눈으로** 본다. `
 
 사라지지 않으면 pg_cron에서 Storage API를 호출하는 방식(Edge Function 등)으로 바꿔야 하며,
 그건 ADR-005의 "새 인프라가 늘지 않는다"는 근거를 재검토하게 만든다.
+
+### F-3. `tdd-guard.test.mjs` 픽스처 충돌 — Phase 2 전 권장
+
+Phase 1 이후 `node scripts/hooks/tdd-guard.test.mjs`가 **25 passed, 3 failed**가 됐다
+(Phase 0 시점에는 28/28 통과).
+
+**가드 자체는 정상이다.** 훅 파일(`scripts/hooks/tdd-guard.mjs`)은 Phase 1에서 한 줄도 바뀌지 않았고,
+직접 호출해 확인했다:
+
+```
+테스트 없는 새 경로(src/lib/brandnew/thing.ts)  → DENY  ✓
+테스트가 생긴 경로(src/lib/csv/normalize.ts)    → ALLOW ✓ (이게 정답이다)
+```
+
+원인은 **테스트 픽스처의 경로 선택**이다. `tdd-guard.test.mjs:70`이 "테스트 없는 새 구현 파일"
+픽스처로 **상대경로** `src/lib/csv/normalize.ts`를 쓴다:
+
+```js
+const addPatch = "*** Begin Patch\n*** Add File: src/lib/csv/normalize.ts\n+export const x = 1;\n*** End Patch";
+```
+
+Phase 1 step 0이 `src/lib/csv/normalize.test.ts`를 정당하게 만들었으므로 가드가 이제 ALLOW를 낸다.
+**낡은 것은 가드가 아니라 테스트의 기대값이다.** 같은 파일 61번째 줄의 절대경로 픽스처
+(`D:\p\src\lib\csv\normalize.ts`)는 존재하지 않는 경로라 그대로 DENY로 통과한다 — 실패한 3개가
+전부 상대경로를 쓰는 `apply_patch` 변형인 이유다.
+
+고치는 법: 픽스처 경로를 **레포에 절대 생기지 않을 이름**으로 바꾼다.
+
+```js
+// src/lib/csv/normalize.ts → 실제 파일이 생기면 픽스처가 무력화된다
+const addPatch = "*** Begin Patch\n*** Add File: src/lib/__fixture_never_exists__.ts\n+export const x = 1;\n*** End Patch";
+```
+
+**이번 Phase에서 고치지 않은 이유**: 사용자 조건 6(「Phase 1 범위를 벗어난 기능은 수정하지 않기」).
+`scripts/hooks/`는 하네스 인프라이고 Phase 1 산출물이 아니다. 다만 이 테스트가 빨간 상태로 남으면
+Phase 2에서 **진짜 회귀와 이 잡음을 구분할 수 없으므로** Phase 2 전에 고치는 것을 권한다.
 
 ### F-2. `execute.py` 경과 시간 표시 버그 — 아무 때나
 
@@ -225,7 +345,7 @@ ARCHITECTURE.md §디렉토리 구조에 없지만 필요한 것들. 이유를 �
 | 시점 | 무엇 | 왜 자동화 못 하나 |
 |---|---|---|
 | Phase 0 후 | Supabase 프로젝트 생성 · 마이그레이션 적용 · Google OAuth provider 설정 → **B-2로 이관, 「미해결 항목」 참고** | 외부 콘솔 |
-| Phase 1 후 | 실제 카드사 CSV 2~3개로 파싱 검증 | 실물 파일이 필요하고, 이 제품에서 가장 위험한 부분이다(ADR-012) |
+| Phase 1 후 | 실제 카드사 CSV 2~3개로 파싱 검증 → **B-3으로 이관, 미수행. 「미해결 항목」 참고** | 실물 파일이 필요하고, 이 제품에서 가장 위험한 부분이다(ADR-012) |
 | Phase 2 후 | `ANTHROPIC_API_KEY`로 LLM 호출 2곳 실측 (mock과 실제 SDK 괴리 확인 — ADR-018 트레이드오프) | 키 필요 |
 | Phase 3 후 | 라이트/다크 · 880px 이하 · 빈 상태 · 잠긴 상태 육안 확인 | 시각 |
 | Phase 5 후 | Polar 샌드박스 결제 → 웹훅 → `profiles.plan` 전이 | 외부 결제 |
