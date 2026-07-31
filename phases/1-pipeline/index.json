@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "csv-fingerprint",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T09:52:00+0900",
+      "summary": "lib/csv/fingerprint.ts — fileHash(sha256 hex), headerFingerprint(상위 20행, 숫자→# 마스킹, 데이터 행은 셀 수만 기여해 상호명이 전역 테이블에 남지 않음). 같은 카드사 다른 달 = 같은 지문 테스트로 고정했습니다.",
+      "completed_at": "2026-07-31T09:54:10+0900"
     },
     {
       "step": 2,
