@@ -29,7 +29,10 @@
     {
       "step": 3,
       "name": "map-columns",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T10:00:10+0900",
+      "summary": "services/claude/map-columns.ts — mapColumns(topRows) → {headerRowIndex, columnMap}. 상위 20행만 CSV로 전송하고 zod 뒤에 인덱스 범위·중복 배정을 검증하며 실패는 ClaudeCallError('schema')로 처리합니다. 폴백 휴리스틱과 DB 조회·저장은 없습니다.",
+      "completed_at": "2026-07-31T10:03:03+0900"
     },
     {
       "step": 4,
