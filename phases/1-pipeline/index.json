@@ -45,7 +45,10 @@
     {
       "step": 5,
       "name": "classify-merchants",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T10:07:50+0900",
+      "summary": "services/claude/classify-merchants.ts — classifyMerchants(names) → 같은 길이·순서의 MerchantVerdict[]. 상호명만 전송, 계정과목 18개는 ACCOUNT_CODES에서 프롬프트 생성, 응답 index/length 불일치는 schema 에러(정렬 복원 안 함), 목록 밖 값은 항목 단위 uncertain 강등, 배치 100",
+      "completed_at": "2026-07-31T10:10:57+0900"
     },
     {
       "step": 6,
