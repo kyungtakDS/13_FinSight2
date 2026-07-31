@@ -15,16 +15,142 @@ python scripts/execute.py 0-foundation --push
 
 ## Phase 개요
 
-| Phase | dir | steps | 무엇을 만드나 | 끝나면 확인 가능한 것 |
-|---|---|---|---|---|
-| 0 | `0-foundation` | 6 | 스캐폴딩 · 디자인 토큰 · 타입 · DB 스키마 · Supabase 클라이언트 · 인증 | Google 로그인 후 빈 `/dashboard` 진입 |
-| 1 | `1-pipeline` | 7 | CSV 정규화·지문 · Claude 호출 2곳 · 전역 사전 · 서버 집계 | 픽스처 CSV → 리포트 요약 객체 (전부 유닛테스트) |
-| 2 | `2-api` | 6 | 게이트 · 분석 오케스트레이션 · uploads 라우트 5개 | curl로 업로드 → 폴링 → 리포트 JSON |
-| 3 | `3-app-ui` | 6 | 앱 셸 · 업로드 화면 · 리포트 3상태 · 잠금 | 브라우저에서 업로드→리포트 전 과정 |
-| 4 | `4-marketing` | 3 | 마케팅 컴포넌트 · 랜딩 · `/legal` | 랜딩 → 가입 진입 |
-| 5 | `5-billing` | 4 | Polar 클라이언트 · checkout/portal · 웹훅 · `/upgrade` | 결제 → Pro 잠금 해제 |
+| Phase | dir | steps | 상태 | 무엇을 만드나 | 끝나면 확인 가능한 것 |
+|---|---|---|---|---|---|
+| 0 | `0-foundation` | 6 | **completed** (2026-07-31) | 스캐폴딩 · 디자인 토큰 · 타입 · DB 스키마 · Supabase 클라이언트 · 인증 | Google 로그인 후 빈 `/dashboard` 진입 |
+| 1 | `1-pipeline` | 7 | pending | CSV 정규화·지문 · Claude 호출 2곳 · 전역 사전 · 서버 집계 | 픽스처 CSV → 리포트 요약 객체 (전부 유닛테스트) |
+| 2 | `2-api` | 6 | pending | 게이트 · 분석 오케스트레이션 · uploads 라우트 5개 | curl로 업로드 → 폴링 → 리포트 JSON |
+| 3 | `3-app-ui` | 6 | pending | 앱 셸 · 업로드 화면 · 리포트 3상태 · 잠금 | 브라우저에서 업로드→리포트 전 과정 |
+| 4 | `4-marketing` | 3 | pending | 마케팅 컴포넌트 · 랜딩 · `/legal` | 랜딩 → 가입 진입 |
+| 5 | `5-billing` | 4 | pending | Polar 클라이언트 · checkout/portal · 웹훅 · `/upgrade` | 결제 → Pro 잠금 해제 |
 
 **Phase 간 순서는 강제다.** Phase N의 step은 Phase N-1이 전부 `completed`인 상태를 전제한다. Phase 내부에서도 step 순서는 강제다 (각 step의 「이전 Step과의 의존성」 참고).
+
+> 위 표는 **사람이 읽는 요약**이다. 기계가 읽는 상태의 권위는 `phases/index.json`과
+> `phases/{phase}/index.json`이고, 그쪽은 `execute.py`가 갱신한다. 둘이 어긋나면 JSON이 맞다.
+
+---
+
+## 진행 현황
+
+### Phase 0 — 완료 (2026-07-31 08:53:36 → 09:24:17, 30분 41초)
+
+6개 step 전부 `completed`. 각 step에 `started_at` · `completed_at` · `summary`가 기록돼 있다
+(`phases/0-foundation/index.json`). 브랜치 `feat-0-foundation`, Draft PR #10.
+
+| # | name | 소요 | 산출물 |
+|---|---|---|---|
+| 0 | `project-setup` | 6m34s | Next 16.2.12 / React 19.2.8 / TS strict / Tailwind v4 / ESLint 9 flat / Vitest 4 |
+| 1 | `design-tokens` | 4m26s | 토큰 5개 + `theme.css` → `src/styles/` (바이트 동일), `@theme inline`, `next/font` 3종, `ThemeToggle` |
+| 2 | `core-types` | 4m07s | `src/types/` 7개. `ERROR_CODES`(7) · `VERDICTS`(3) · `ACCOUNT_CODES`(18) |
+| 3 | `db-schema` | 5m11s | `migrations/0001~0004` — 테이블 6 · 인덱스 · RLS · Storage 정책 · pg_cron |
+| 4 | `supabase-clients` | 5m42s | `client`/`server`/`service`. 헬퍼 6개 전부 `userId` 필수 첫 인자 |
+| 5 | `auth-flow` | 4m37s | `middleware.ts`(+테스트) · `/auth/callback` · Google 로그인/로그아웃 |
+
+**검증 결과** (하네스와 별개로 직접 실행):
+
+```
+npm run lint    exit 0
+npm run build   exit 0 — 4 routes + middleware. .env 없이 통과 → lazy env 실증(ADR-018)
+npm run test    56 passed / 11 files
+```
+
+CRITICAL 규칙 11항목 감사 통과: service role 헬퍼 `userId` 첫 인자 · `client.ts`에 service role 미참조 ·
+lazy env · 카드번호/승인번호 컬럼 부재 · 전역 사전 2개 테이블에 사용자 식별자 부재 · `subscriptions` 테이블 부재 ·
+파괴적 DDL 부재 · `src/middleware.test.ts` 선작성 · `src/__tests__/` 우회 부재 · raw hex/px/이모지 0건 ·
+`tailwind.config.*` 부재 및 `fonts.css` 미복사.
+
+---
+
+## 미해결 항목 (Phase 0 종료 시점)
+
+**blocker**는 해당 Phase를 **시작하기 전에** 처리해야 하는 것이고, **후속 작업**은 병렬로 진행해도
+Phase 진행을 막지 않는 것이다. 이 구분이 곧 "지금 Phase 1을 시작해도 되는가"의 답이다.
+
+| # | 항목 | 구분 | 언제 | 막는 것 |
+|---|---|---|---|---|
+| B-1 | `middleware` → `proxy` 전환 결정 | **blocker** | **Phase 2 시작 전** | Phase 2가 미들웨어를 다시 건드린다 |
+| B-2 | Supabase DB 마이그레이션 적용 · Google OAuth provider 설정 | **blocker (환경)** | Phase 3 검증 전 | 로그인·업로드를 브라우저로 확인할 수 없다 |
+| F-1 | `0004_expiry_cron.sql` 실제 동작 확인 | 후속 | B-2 완료 후 | 없음 (Phase 진행을 막지 않음) |
+| F-2 | `execute.py` 경과 시간 표시 버그 | 후속 | 아무 때나 | 없음 (표시만의 문제) |
+
+**Phase 1은 위 넷 중 어느 것에도 막히지 않는다.** Phase 1은 순수 로직과 mock뿐이라
+DB·OAuth·미들웨어와 무관하다(ADR-018). 지금 바로 실행할 수 있다.
+
+### B-1. `middleware` → `proxy` 전환 결정 — Phase 2 시작 전
+
+`next build`가 경고를 낸다:
+
+```
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.
+```
+
+Next 16.2.12에서 `src/middleware.ts` 관례가 deprecated 됐다. **빌드는 통과하고 동작도 정상이다** —
+지금 당장 깨지는 것은 없다.
+
+문제는 `docs/ARCHITECTURE.md` §디렉토리 구조가 `src/middleware.ts` + `src/middleware.test.ts`를
+명시하고, `AGENTS.md`가 *"`src/middleware.ts`는 tdd-guard 면제가 아니다"*를 못박고 있다는 점이다.
+**문서와 프레임워크가 갈렸다.**
+
+Phase 2 시작 전에 정해야 하는 이유: Phase 2의 게이트·라우트가 미들웨어와 같은 인증 경계를 공유하고,
+전환을 나중에 하면 그때 작성된 테스트·문서를 다시 고쳐야 한다.
+
+선택지:
+- **(a) 현행 유지** — 경고를 받아들이고 Next가 제거할 때 옮긴다. 문서 수정 0.
+- **(b) `proxy`로 전환** — `src/proxy.ts` + `src/proxy.test.ts`로 옮기고 `ARCHITECTURE.md`·`AGENTS.md`·
+  `tdd-guard.mjs`의 면제 규칙까지 함께 고친다. 파일명이 바뀌므로 tdd-guard가 `proxy.ts`를
+  면제로 착각하지 않는지 확인해야 한다.
+
+**결정 주체는 사람이다.** 결정 전에는 Phase 2를 시작하지 마라.
+
+### B-2. Supabase 적용 · Google OAuth — 환경 설정
+
+`phases/PLAN.md` D-8의 설계대로 Phase 0은 **SQL 파일을 커밋하는 데서 끝냈다.** DB에는 아무것도
+적용되지 않았다. `supabase/README.md`에 절차가 있다.
+
+해야 할 일:
+1. Supabase 프로젝트 생성
+2. `supabase/migrations/0001~0004`를 순서대로 적용
+3. `pg_cron` 확장 활성화 (콘솔에서 별도 필요할 수 있다)
+4. Storage 버킷 `csv-uploads`가 **비공개**로 생성됐는지 확인
+5. Google OAuth provider 활성화 + redirect URL에 `{SITE_URL}/auth/callback` 등록
+6. `.env`에 `NEXT_PUBLIC_SUPABASE_URL` · `NEXT_PUBLIC_SUPABASE_ANON_KEY` · `SUPABASE_SERVICE_ROLE_KEY` 채우기
+
+**이것이 안 돼도 Phase 1·2의 테스트는 전부 통과한다** — 전부 mock이기 때문이다(ADR-018).
+막히는 것은 브라우저로 실제 로그인·업로드를 확인하는 일뿐이고, 그건 Phase 3 검증 시점에 필요하다.
+
+### F-1. `0004_expiry_cron.sql` 실제 동작 확인 — B-2 완료 후
+
+SQL로 `storage.objects` 행을 삭제했을 때 **오브젝트 스토리지의 바이트까지 정리되는지**는
+Supabase 프로젝트 설정에 따라 다르다. 90일 만료 정책(ADR-005)의 집행이 여기 걸려 있다.
+
+확인 방법: 테스트 업로드 1건의 `expires_at`을 과거로 바꾸고 잡을 수동 실행한 뒤,
+Storage 콘솔에서 객체가 실제로 사라졌는지 **눈으로** 본다. `uploads.storage_path`가 `null`이 되고
+`transactions`·`summary`는 남아 있어야 한다.
+
+사라지지 않으면 pg_cron에서 Storage API를 호출하는 방식(Edge Function 등)으로 바꿔야 하며,
+그건 ADR-005의 "새 인프라가 늘지 않는다"는 근거를 재검토하게 만든다.
+
+### F-2. `execute.py` 경과 시간 표시 버그 — 아무 때나
+
+Phase 0 실행 중 모든 step이 `[0s]`로 찍혔다. 실제로는 30분 40초 걸렸다.
+
+원인 (`scripts/execute.py` `_execute_single_step`):
+
+```python
+with progress_indicator(tag) as pi:
+    self._invoke_codex(step, preamble)
+    elapsed = int(pi.elapsed)      # ← with 블록 '안'에서 읽는다
+```
+
+`progress_indicator`는 `info.elapsed`를 `finally`에서 설정하는데, `finally`는 `with` 블록이
+**끝난 뒤에** 실행된다. 따라서 위 줄은 항상 초기값 `0.0`을 읽는다.
+
+고치려면 `elapsed = int(pi.elapsed)`를 `with` 블록 **밖으로** 빼면 된다.
+
+**표시만의 문제다.** step 실행·재시도·커밋·상태 기록은 전부 정상이었고,
+정확한 소요 시간은 `index.json`의 `started_at`/`completed_at`으로 계산할 수 있다
+(위 「진행 현황」 표의 소요 열이 그렇게 뽑은 값이다).
 
 ---
 
@@ -98,7 +224,7 @@ ARCHITECTURE.md §디렉토리 구조에 없지만 필요한 것들. 이유를 �
 
 | 시점 | 무엇 | 왜 자동화 못 하나 |
 |---|---|---|
-| Phase 0 후 | Supabase 프로젝트 생성 · 마이그레이션 적용 · Google OAuth provider 설정 | 외부 콘솔 |
+| Phase 0 후 | Supabase 프로젝트 생성 · 마이그레이션 적용 · Google OAuth provider 설정 → **B-2로 이관, 「미해결 항목」 참고** | 외부 콘솔 |
 | Phase 1 후 | 실제 카드사 CSV 2~3개로 파싱 검증 | 실물 파일이 필요하고, 이 제품에서 가장 위험한 부분이다(ADR-012) |
 | Phase 2 후 | `ANTHROPIC_API_KEY`로 LLM 호출 2곳 실측 (mock과 실제 SDK 괴리 확인 — ADR-018 트레이드오프) | 키 필요 |
 | Phase 3 후 | 라이트/다크 · 880px 이하 · 빈 상태 · 잠긴 상태 육안 확인 | 시각 |
