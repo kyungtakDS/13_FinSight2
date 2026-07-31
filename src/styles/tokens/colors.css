@@ -1,0 +1,44 @@
+/* FinSight2 — Color tokens
+   Monochrome system core + oversized pastel color-block palette.
+   Pastel hex values are faithful approximations derived from the spec. */
+:root {
+  /* Brand & accent */
+  --color-primary: #000000;        /* system primary: every primary CTA, headline, body line */
+  --color-on-primary: #ffffff;     /* inverse text on black; foreground of secondary pill */
+  --color-accent-magenta: #e5227e; /* single promo CTA pink — use scarcely */
+
+  /* Surface */
+  --color-canvas: #ffffff;         /* default page background, white card body */
+  --color-inverse-canvas: #000000; /* footer ribbon, marquee strip, dark story sections */
+  --color-surface-soft: #f4f3f1;   /* off-white tiles: icon buttons, template cards */
+  --color-hairline: #e6e5e2;       /* 1px borders on inputs, pricing cards, dividers */
+  --color-hairline-soft: #efeeeb;  /* subtler dividers: table rows, footer rules */
+
+  /* Color blocks (signature) */
+  --color-block-lime:  #dcf264;    /* systems / FAQ / contact-form ground */
+  --color-block-lilac: #ddcdf7;    /* /design hero, FigJam highlight, promo banner */
+  --color-block-cream: #f4eddb;    /* FigJam hero strip, template-grid */
+  --color-block-mint:  #c9f2de;    /* FigJam pastel section */
+  --color-block-pink:  #f8d6e6;    /* FigJam pastel section */
+  --color-block-coral: #fbb79c;    /* "ship products" story block */
+  --color-block-navy:  #1e1f45;    /* deep indigo story block (only dark surface above footer) */
+
+  /* Ink ON color blocks. Deliberately NOT re-declared by the dark theme: the
+     blocks keep their pastel/navy fill in both themes, so their text must keep
+     its fill too. Using --color-ink here would invert to white on lime. */
+  --color-block-ink: #000000;         /* on lime/lilac/cream/mint/pink/coral */
+  --color-block-ink-inverse: #ffffff; /* on navy */
+
+  /* Text */
+  --color-ink: #000000;            /* all type on light surfaces — weight carries hierarchy */
+  --color-inverse-ink: #ffffff;    /* type on inverse-canvas / navy block */
+  --color-on-inverse-soft: #ffffff;/* base color for ~16% translucent icon buttons on dark */
+
+  /* Semantic */
+  --color-success: #14ae5c;        /* comparison-table checkmark glyph */
+  --color-overlay-scrim: #000000;  /* base for ~60% modal/video scrim */
+
+  /* Render-time translucency helpers */
+  --scrim-overlay: rgba(0,0,0,0.6);
+  --icon-inverse-surface: rgba(255,255,255,0.16);
+}

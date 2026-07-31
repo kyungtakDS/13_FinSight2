@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "design-tokens",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T09:00:10+0900",
+      "summary": "design/ 토큰 5개와 theme.css를 src/styles/로 복사하고 Tailwind var() 매핑, next/font 3종, FOUC 방지 초기화와 ThemeToggle을 배선했습니다.",
+      "completed_at": "2026-07-31T09:03:42+0900"
     },
     {
       "step": 2,

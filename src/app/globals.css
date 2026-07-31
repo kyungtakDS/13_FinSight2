@@ -1,1 +1,69 @@
 @import "tailwindcss";
+@import "../styles/tokens/colors.css";
+@import "../styles/tokens/typography.css";
+@import "../styles/tokens/spacing.css";
+@import "../styles/tokens/radius.css";
+@import "../styles/tokens/elevation.css";
+@import "../styles/theme.css";
+
+:root {
+  --font-sans: var(--font-inter), var(--font-kr), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+}
+
+@theme inline {
+  --color-primary: var(--color-primary);
+  --color-on-primary: var(--color-on-primary);
+  --color-accent-magenta: var(--color-accent-magenta);
+  --color-canvas: var(--color-canvas);
+  --color-inverse-canvas: var(--color-inverse-canvas);
+  --color-surface-soft: var(--color-surface-soft);
+  --color-hairline: var(--color-hairline);
+  --color-hairline-soft: var(--color-hairline-soft);
+  --color-block-lime: var(--color-block-lime);
+  --color-block-lilac: var(--color-block-lilac);
+  --color-block-cream: var(--color-block-cream);
+  --color-block-mint: var(--color-block-mint);
+  --color-block-pink: var(--color-block-pink);
+  --color-block-coral: var(--color-block-coral);
+  --color-block-navy: var(--color-block-navy);
+  --color-block-ink: var(--color-block-ink);
+  --color-block-ink-inverse: var(--color-block-ink-inverse);
+  --color-ink: var(--color-ink);
+  --color-inverse-ink: var(--color-inverse-ink);
+  --color-success: var(--color-success);
+  --color-accent: var(--fs-accent);
+  --color-accent-ink: var(--fs-accent-ink);
+  --color-accent-soft: var(--fs-accent-soft);
+  --color-accent-line: var(--fs-accent-line);
+  --color-biz: var(--fs-biz);
+  --color-biz-soft: var(--fs-biz-soft);
+  --color-personal: var(--fs-personal);
+  --color-personal-soft: var(--fs-personal-soft);
+  --color-unsure: var(--fs-unsure);
+  --color-unsure-soft: var(--fs-unsure-soft);
+  --color-shell: var(--fs-shell);
+  --color-muted: var(--fs-muted);
+  --color-chart-1: var(--fs-chart-1);
+  --color-chart-2: var(--fs-chart-2);
+  --color-chart-3: var(--fs-chart-3);
+  --color-chart-4: var(--fs-chart-4);
+  --color-chart-5: var(--fs-chart-5);
+  --color-chart-6: var(--fs-chart-6);
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-pill: var(--radius-pill);
+  --radius-full: var(--radius-full);
+  --spacing-hair: var(--space-hair);
+  --spacing-xxs: var(--space-xxs);
+  --spacing-xs: var(--space-xs);
+  --spacing-sm: var(--space-sm);
+  --spacing-md: var(--space-md);
+  --spacing-lg: var(--space-lg);
+  --spacing-xl: var(--space-xl);
+  --spacing-xxl: var(--space-xxl);
+  --spacing-section: var(--space-section);
+}
