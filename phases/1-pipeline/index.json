@@ -37,7 +37,10 @@
     {
       "step": 4,
       "name": "merchant-dictionary",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-07-31T10:03:57+0900",
+      "summary": "lib/classify/dictionary.ts — merchantKey(NFC+공백 정리+대소문자 통일), lookupMerchants(500개 배치, 사용자 식별자 없음), upsertMerchants(항목 단위 검증으로 고정 목록 밖 계정과목·uncertain·빈 키·부적합 근거 거부 후 개수만 반환). service role을 사용하며 사전 쓰기의 유일한 경로입니다.",
+      "completed_at": "2026-07-31T10:07:00+0900"
     },
     {
       "step": 5,
