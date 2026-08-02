@@ -17,3 +17,6 @@ __pycache__/
 # phase execution outputs
 phases/**/phase*-output.json
 phases/**/step*-output.json
+
+# agent worktrees (EnterWorktree checks these out inside the repo)
+.claude/worktrees/
