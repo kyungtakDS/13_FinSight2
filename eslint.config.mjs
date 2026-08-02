@@ -11,5 +11,6 @@ export default defineConfig([
     "coverage/**",
     "next-env.d.ts",
     "design/prototype/**",
+    ".claude/**",
   ]),
 ]);
