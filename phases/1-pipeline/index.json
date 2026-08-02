@@ -2,12 +2,63 @@
   "project": "FinSight2",
   "phase": "1-pipeline",
   "steps": [
-    { "step": 0, "name": "csv-normalize", "status": "pending" },
-    { "step": 1, "name": "csv-fingerprint", "status": "pending" },
-    { "step": 2, "name": "claude-client", "status": "pending" },
-    { "step": 3, "name": "map-columns", "status": "pending" },
-    { "step": 4, "name": "merchant-dictionary", "status": "pending" },
-    { "step": 5, "name": "classify-merchants", "status": "pending" },
-    { "step": 6, "name": "aggregate", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "csv-normalize",
+      "status": "completed",
+      "started_at": "2026-07-31T09:48:20+0900",
+      "summary": "lib/csv/normalize.ts — UTF-8 strict/cp949 판별·iconv-lite 디코딩·BOM 제거·Papa Parse·취소 부호 보존·날짜/상호 정규화·원본 rowIndex·실패 행 skip 카운트·3,000행 상한을 구현했습니다.",
+      "completed_at": "2026-07-31T09:51:59+0900"
+    },
+    {
+      "step": 1,
+      "name": "csv-fingerprint",
+      "status": "completed",
+      "started_at": "2026-07-31T09:52:00+0900",
+      "summary": "lib/csv/fingerprint.ts — fileHash(sha256 hex), headerFingerprint(상위 20행, 숫자→# 마스킹, 데이터 행은 셀 수만 기여해 상호명이 전역 테이블에 남지 않음). 같은 카드사 다른 달 = 같은 지문 테스트로 고정했습니다.",
+      "completed_at": "2026-07-31T09:55:02+0900"
+    },
+    {
+      "step": 2,
+      "name": "claude-client",
+      "status": "completed",
+      "started_at": "2026-07-31T09:55:03+0900",
+      "summary": "services/claude/client.ts — callStructured<T>(system, userData, zod schema, maxTokens). stop_reason 3분기를 content 접근 전에 수행(refusal/max_tokens/context_exceeded/schema/upstream). 스트리밍+finalMessage, system 캐싱, <user_data> 구분자, maxRetries:0, lazy env, 로깅 0회. SDK effort 파라미터의 실제 이름은 output_config.effort.",
+      "completed_at": "2026-07-31T10:00:09+0900"
+    },
+    {
+      "step": 3,
+      "name": "map-columns",
+      "status": "completed",
+      "started_at": "2026-07-31T10:00:10+0900",
+      "summary": "services/claude/map-columns.ts — mapColumns(topRows) → {headerRowIndex, columnMap}. 상위 20행만 CSV로 전송하고 zod 뒤에 인덱스 범위·중복 배정을 검증하며 실패는 ClaudeCallError('schema')로 처리합니다. 폴백 휴리스틱과 DB 조회·저장은 없습니다.",
+      "completed_at": "2026-07-31T10:03:56+0900"
+    },
+    {
+      "step": 4,
+      "name": "merchant-dictionary",
+      "status": "completed",
+      "started_at": "2026-07-31T10:03:57+0900",
+      "summary": "lib/classify/dictionary.ts — merchantKey(NFC+공백 정리+대소문자 통일), lookupMerchants(500개 배치, 사용자 식별자 없음), upsertMerchants(항목 단위 검증으로 고정 목록 밖 계정과목·uncertain·빈 키·부적합 근거 거부 후 개수만 반환). service role을 사용하며 사전 쓰기의 유일한 경로입니다.",
+      "completed_at": "2026-07-31T10:07:50+0900"
+    },
+    {
+      "step": 5,
+      "name": "classify-merchants",
+      "status": "completed",
+      "started_at": "2026-07-31T10:07:50+0900",
+      "summary": "services/claude/classify-merchants.ts — classifyMerchants(names) → 같은 길이·순서의 MerchantVerdict[]. 상호명만 전송, 계정과목 18개는 ACCOUNT_CODES에서 프롬프트 생성, 응답 index/length 불일치는 schema 에러(정렬 복원 안 함), 목록 밖 값은 항목 단위 uncertain 강등, 배치 100",
+      "completed_at": "2026-07-31T10:11:59+0900"
+    },
+    {
+      "step": 6,
+      "name": "aggregate",
+      "status": "completed",
+      "started_at": "2026-07-31T10:11:59+0900",
+      "summary": "lib/report/aggregate.ts — aggregate(txns) → UploadSummary. 취소 상계, uncertain은 expenseTotal/estimatedSaving/accounts에서 제외하고 count·total로 별도 노출, 절감액은 floor(expenseTotal*0.066) 하한, accounts는 금액 내림차순, insights는 규칙 기반 결정적 전체 목록(절단은 gate 소관). 순수 함수. Phase 1 검토 지점: 실제 카드사 CSV 2~3개로 파싱 수동 검증 필요",
+      "completed_at": "2026-07-31T10:16:22+0900"
+    }
+  ],
+  "created_at": "2026-07-31T09:48:20+0900",
+  "completed_at": "2026-07-31T10:16:23+0900"
 }
