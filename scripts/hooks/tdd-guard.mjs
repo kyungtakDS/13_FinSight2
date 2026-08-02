@@ -32,6 +32,18 @@ function extractPaths(payload) {
   return paths;
 }
 
+/** 이 레포 안의 파일인가. 밖이면 이 프로젝트의 TDD 규칙 대상이 아니다. */
+function isInsideRoot(file) {
+  // 상대경로는 ROOT 기준으로 해석되므로 언제나 레포 안이다.
+  const abs = /^([a-zA-Z]:)?\//.test(file) ? file : `${ROOT}/${file}`;
+  // Windows 는 경로 대소문자를 구분하지 않는다.
+  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const target = norm(abs);
+  const root = norm(ROOT).replace(/\/$/, "");
+  // `${root}/` 로 비교해야 ROOT 와 접두사만 같은 형제 디렉토리가 안 걸린다.
+  return target === root || target.startsWith(`${root}/`);
+}
+
 /** 테스트가 필요 없는 파일인가. */
 function isExempt(file) {
   // 테스트 파일 자체를 수정하는 건 허용
@@ -99,6 +111,10 @@ for (const raw of extractPaths(payload)) {
   // Windows 에서는 백슬래시 경로가 넘어온다. 아래 패턴은 전부 '/' 기준이라
   // 정규화하지 않으면 */types/* · */page.tsx 같은 면제가 통째로 죽는다.
   const file = raw.replace(/\\/g, "/");
+
+  // 훅은 세션의 모든 Edit|Write 에 붙는다. 레포 밖 파일(예: ~/.claude/statusline.js)까지
+  // 검사하면 이 프로젝트와 무관한 편집이 차단된다.
+  if (!isInsideRoot(file)) continue;
 
   if (!/\.(ts|tsx|js|jsx)$/.test(file)) continue;
   if (isExempt(file)) continue;

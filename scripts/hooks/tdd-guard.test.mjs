@@ -38,33 +38,41 @@ function check(toolInput, expect, desc, cwd) {
 /** Claude Code Edit|Write 형태 */
 const edit = (p) => ({ file_path: p });
 
+// 훅은 ROOT(=cwd) 밖 파일을 아예 검사하지 않는다. 그래서 경로 패턴 테스트는
+// 반드시 실제 루트 밑에서 해야 한다 — 예전처럼 가짜 "D:\p\" 를 쓰면 면제 로직을
+// 타는 게 아니라 "레포 밖"이라 건너뛰어져서, 통과해도 아무것도 검증하지 못한다.
+const winRoot = process.cwd().replace(/\//g, "\\");
+const posixRoot = process.cwd().replace(/\\/g, "/");
+const win = (rel) => `${winRoot}\\${rel.replace(/\//g, "\\")}`;
+const posix = (rel) => `${posixRoot}/${rel}`;
+
 // --- 면제: Windows 백슬래시 경로 (실제로 훅에 넘어오는 형태) ---
-check(edit("D:\\p\\design\\prototype\\ds-bundle.js"), "ALLOW", "벤더링된 디자인 참조 자산");
-check(edit("D:\\p\\src\\types\\index.ts"), "ALLOW", "types/");
-check(edit("D:\\p\\src\\app\\layout.tsx"), "ALLOW", "Next 프레임워크 파일");
-check(edit("D:\\p\\src\\app\\page.tsx"), "ALLOW", "Next 프레임워크 파일");
-check(edit("D:\\p\\src\\app\\loading.tsx"), "ALLOW", "Next 프레임워크 파일");
-check(edit("D:\\p\\src\\app\\error.tsx"), "ALLOW", "Next 프레임워크 파일");
-check(edit("D:\\p\\src\\app\\not-found.tsx"), "ALLOW", "Next 프레임워크 파일");
+check(edit(win("design/prototype/ds-bundle.js")), "ALLOW", "벤더링된 디자인 참조 자산");
+check(edit(win("src/types/index.ts")), "ALLOW", "types/");
+check(edit(win("src/app/layout.tsx")), "ALLOW", "Next 프레임워크 파일");
+check(edit(win("src/app/page.tsx")), "ALLOW", "Next 프레임워크 파일");
+check(edit(win("src/app/loading.tsx")), "ALLOW", "Next 프레임워크 파일");
+check(edit(win("src/app/error.tsx")), "ALLOW", "Next 프레임워크 파일");
+check(edit(win("src/app/not-found.tsx")), "ALLOW", "Next 프레임워크 파일");
 
 // --- 면제: POSIX 슬래시 경로 ---
-check(edit("D:/p/design/prototype/app.jsx"), "ALLOW", "슬래시 경로도 동일하게 면제");
-check(edit("D:/p/src/types/index.ts"), "ALLOW", "슬래시 경로도 동일하게 면제");
-check(edit("D:/p/src/app/page.tsx"), "ALLOW", "슬래시 경로도 동일하게 면제");
+check(edit(posix("design/prototype/app.jsx")), "ALLOW", "슬래시 경로도 동일하게 면제");
+check(edit(posix("src/types/index.ts")), "ALLOW", "슬래시 경로도 동일하게 면제");
+check(edit(posix("src/app/page.tsx")), "ALLOW", "슬래시 경로도 동일하게 면제");
 
 // --- 면제: 확장자 기반 (슬래시와 무관) ---
-check(edit("D:\\p\\tailwind.config.ts"), "ALLOW", "설정 파일");
-check(edit("D:\\p\\src\\app\\globals.css"), "ALLOW", "스타일");
-check(edit("D:\\p\\docs\\DESIGN.md"), "ALLOW", "문서");
-check(edit("D:\\p\\src\\lib\\csv\\normalize.test.ts"), "ALLOW", "테스트 파일 자체");
+check(edit(win("tailwind.config.ts")), "ALLOW", "설정 파일");
+check(edit(win("src/app/globals.css")), "ALLOW", "스타일");
+check(edit(win("docs/DESIGN.md")), "ALLOW", "문서");
+check(edit(win("src/lib/csv/normalize.test.ts")), "ALLOW", "테스트 파일 자체");
 
 // --- 차단: 테스트가 먼저 있어야 하는 구현 코드 ---
-check(edit("D:\\p\\src\\lib\\csv\\normalize.ts"), "DENY", "순수 로직");
-check(edit("D:\\p\\src\\components\\Report.tsx"), "DENY", "컴포넌트");
-check(edit("D:\\p\\src\\app\\api\\uploads\\route.ts"), "DENY", "라우트 핸들러");
-check(edit("D:/p/src/services/claude/map.ts"), "DENY", "외부 SDK 래퍼");
+check(edit(win("src/lib/csv/normalize.ts")), "DENY", "순수 로직");
+check(edit(win("src/components/Report.tsx")), "DENY", "컴포넌트");
+check(edit(win("src/app/api/uploads/route.ts")), "DENY", "라우트 핸들러");
+check(edit(posix("src/services/claude/map.ts")), "DENY", "외부 SDK 래퍼");
 // AGENTS.md: middleware.ts 는 면제가 아니다
-check(edit("D:\\p\\src\\middleware.ts"), "DENY", "middleware 는 면제 아님");
+check(edit(win("src/middleware.ts")), "DENY", "middleware 는 면제 아님");
 
 // --- Codex apply_patch: 프리폼 패치 원문에서 경로를 뽑아야 한다 ---
 const addPatch = "*** Begin Patch\n*** Add File: src/lib/csv/normalize.ts\n+export const x = 1;\n*** End Patch";
@@ -98,6 +106,27 @@ check(
 );
 
 fs.rmSync(tmp, { recursive: true, force: true });
+
+// --- 레포 밖 파일은 이 프로젝트의 TDD 규칙 대상이 아니다 ---
+// 훅은 Claude Code 세션의 모든 Edit|Write 에 붙는다. ROOT 검사가 없으면
+// ~/.claude/statusline.js 같은 개인 설정 파일까지 .js 라는 이유로 차단된다.
+const outside = fs.mkdtempSync(path.join(os.tmpdir(), "tdd-guard-outside-"));
+fs.mkdirSync(path.join(outside, ".claude"), { recursive: true });
+
+check(edit(path.join(outside, ".claude", "statusline.js")), "ALLOW", "레포 밖 개인 설정 파일");
+check(edit(path.join(outside, "impl.ts")), "ALLOW", "레포 밖 .ts 는 이 레포 소관이 아니다");
+
+// ROOT 와 문자열 접두사만 같은 형제 디렉토리는 레포 밖이다 (startsWith 함정)
+check(edit(`${process.cwd()}-sibling/src/lib/impl.ts`), "ALLOW", "ROOT 접두사만 같은 형제 경로");
+
+// Windows 는 드라이브 문자 대소문자를 구분하지 않는다 — 여전히 레포 안이다
+const cwdWin = process.cwd().replace(/\//g, "\\");
+const flipped = /^[a-zA-Z]:/.test(cwdWin)
+  ? (cwdWin[0] === cwdWin[0].toLowerCase() ? cwdWin[0].toUpperCase() : cwdWin[0].toLowerCase()) + cwdWin.slice(1)
+  : cwdWin;
+check(edit(`${flipped}\\src\\lib\\naked_case.ts`), "DENY", "드라이브 문자 대소문자가 달라도 레포 안");
+
+fs.rmSync(outside, { recursive: true, force: true });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
