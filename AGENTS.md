@@ -100,5 +100,9 @@ codex 0.145.0 은 `<repo>/.codex/hooks.json` 을 **탐색하지 않는다**. 훅
 - Windows. Node v24.15.0 / npm 11.12.1
 - Python은 `C:\miniconda3\envs\flood_risk311\python.exe` (PATH의 `python`은 Store alias stub이라 실행 안 됨)
 - `codex` CLI가 PATH에 있고 로그인되어 있어야 한다 (`codex login`)
+- Supabase MCP 서버가 `.mcp.json`에 프로젝트 스코프로 걸려 있다 (호스팅 HTTP, OAuth — PAT 불필요).
+  처음 쓸 때 `/mcp` → supabase → Authenticate 로 로그인한다.
+  `?read_only=true`가 붙어 있어 **읽기 전용**이다 — `apply_migration`·쓰기 `execute_sql`은 막힌다.
+  마이그레이션을 MCP로 돌려야 하면 그 파라미터를 지워라 (지우면 계정 전체에 쓰기 권한이 열린다).
 - 하네스 테스트는 UTF-8 모드로 돌려라 — `PYTHONUTF8=1 python -m pytest scripts/test_execute.py`
   (Windows 기본 인코딩이 cp949라 한글 픽스처가 깨진다)
