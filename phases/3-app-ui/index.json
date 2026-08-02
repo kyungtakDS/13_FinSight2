@@ -1,0 +1,12 @@
+{
+  "project": "FinSight2",
+  "phase": "3-app-ui",
+  "steps": [
+    { "step": 0, "name": "app-shell", "status": "pending" },
+    { "step": 1, "name": "upload-dropzone", "status": "pending" },
+    { "step": 2, "name": "uploads-history", "status": "pending" },
+    { "step": 3, "name": "analysis-status", "status": "pending" },
+    { "step": 4, "name": "report-summary", "status": "pending" },
+    { "step": 5, "name": "report-table-lock", "status": "pending" }
+  ]
+}

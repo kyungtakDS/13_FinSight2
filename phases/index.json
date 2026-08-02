@@ -1,0 +1,28 @@
+{
+  "phases": [
+    {
+      "dir": "0-foundation",
+      "status": "pending"
+    },
+    {
+      "dir": "1-pipeline",
+      "status": "pending"
+    },
+    {
+      "dir": "2-api",
+      "status": "pending"
+    },
+    {
+      "dir": "3-app-ui",
+      "status": "pending"
+    },
+    {
+      "dir": "4-marketing",
+      "status": "pending"
+    },
+    {
+      "dir": "5-billing",
+      "status": "pending"
+    }
+  ]
+}
