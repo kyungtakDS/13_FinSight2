@@ -1,0 +1,44 @@
+/* FinSight2 — Typography tokens
+   A single variable voice (Inter, substituting figmaSans) modulating at fine
+   weight increments, with figmaMono (JetBrains Mono) reserved for taxonomy.
+   Negative letter-spacing scales with size; weight carries body hierarchy. */
+:root {
+  --font-sans: 'Inter', 'SF Pro Display', system-ui, helvetica, sans-serif;   /* figmaSans substitute */
+  --font-mono: 'JetBrains Mono', 'SF Mono', menlo, monospace;                 /* figmaMono substitute */
+
+  /* Fine-grained weight axis — pick only from this set */
+  --weight-320: 320;
+  --weight-330: 330;
+  --weight-340: 340;
+  --weight-450: 450;
+  --weight-480: 480;
+  --weight-540: 540;
+  --weight-700: 700;
+
+  /* Role tokens: size / line-height / letter-spacing / weight */
+  --type-display-xl-size: 86px;   --type-display-xl-lh: 1.00; --type-display-xl-ls: -1.72px; --type-display-xl-weight: 340;
+  --type-display-lg-size: 64px;   --type-display-lg-lh: 1.10; --type-display-lg-ls: -0.96px; --type-display-lg-weight: 340;
+  --type-headline-size: 26px;     --type-headline-lh: 1.35;   --type-headline-ls: -0.26px;   --type-headline-weight: 540;
+  --type-subhead-size: 26px;      --type-subhead-lh: 1.35;    --type-subhead-ls: -0.26px;    --type-subhead-weight: 340;
+  --type-card-title-size: 24px;   --type-card-title-lh: 1.45; --type-card-title-ls: 0;       --type-card-title-weight: 700;
+  --type-body-lg-size: 20px;      --type-body-lg-lh: 1.40;    --type-body-lg-ls: -0.14px;    --type-body-lg-weight: 330;
+  --type-body-size: 18px;         --type-body-lh: 1.45;       --type-body-ls: -0.26px;       --type-body-weight: 320;
+  --type-body-sm-size: 16px;      --type-body-sm-lh: 1.45;    --type-body-sm-ls: -0.14px;    --type-body-sm-weight: 330;
+  --type-link-size: 20px;         --type-link-lh: 1.40;       --type-link-ls: -0.10px;       --type-link-weight: 480;
+  --type-button-size: 20px;       --type-button-lh: 1.40;     --type-button-ls: -0.10px;     --type-button-weight: 480;
+  --type-eyebrow-size: 18px;      --type-eyebrow-lh: 1.30;    --type-eyebrow-ls: 0.54px;     --type-eyebrow-weight: 400;
+  --type-caption-size: 12px;      --type-caption-lh: 1.00;    --type-caption-ls: 0.60px;     --type-caption-weight: 400;
+}
+
+/* Convenience role classes (optional; tokens above are the source of truth) */
+.t-display-xl { font-family: var(--font-sans); font-size: var(--type-display-xl-size); line-height: var(--type-display-xl-lh); letter-spacing: var(--type-display-xl-ls); font-weight: var(--type-display-xl-weight); font-feature-settings: 'kern' 1; }
+.t-display-lg { font-family: var(--font-sans); font-size: var(--type-display-lg-size); line-height: var(--type-display-lg-lh); letter-spacing: var(--type-display-lg-ls); font-weight: var(--type-display-lg-weight); font-feature-settings: 'kern' 1; }
+.t-headline   { font-family: var(--font-sans); font-size: var(--type-headline-size); line-height: var(--type-headline-lh); letter-spacing: var(--type-headline-ls); font-weight: var(--type-headline-weight); }
+.t-subhead    { font-family: var(--font-sans); font-size: var(--type-subhead-size); line-height: var(--type-subhead-lh); letter-spacing: var(--type-subhead-ls); font-weight: var(--type-subhead-weight); }
+.t-card-title { font-family: var(--font-sans); font-size: var(--type-card-title-size); line-height: var(--type-card-title-lh); letter-spacing: var(--type-card-title-ls); font-weight: var(--type-card-title-weight); }
+.t-body-lg    { font-family: var(--font-sans); font-size: var(--type-body-lg-size); line-height: var(--type-body-lg-lh); letter-spacing: var(--type-body-lg-ls); font-weight: var(--type-body-lg-weight); }
+.t-body       { font-family: var(--font-sans); font-size: var(--type-body-size); line-height: var(--type-body-lh); letter-spacing: var(--type-body-ls); font-weight: var(--type-body-weight); }
+.t-body-sm    { font-family: var(--font-sans); font-size: var(--type-body-sm-size); line-height: var(--type-body-sm-lh); letter-spacing: var(--type-body-sm-ls); font-weight: var(--type-body-sm-weight); }
+.t-link       { font-family: var(--font-sans); font-size: var(--type-link-size); line-height: var(--type-link-lh); letter-spacing: var(--type-link-ls); font-weight: var(--type-link-weight); }
+.t-eyebrow    { font-family: var(--font-mono); font-size: var(--type-eyebrow-size); line-height: var(--type-eyebrow-lh); letter-spacing: var(--type-eyebrow-ls); font-weight: var(--type-eyebrow-weight); text-transform: uppercase; }
+.t-caption    { font-family: var(--font-mono); font-size: var(--type-caption-size); line-height: var(--type-caption-lh); letter-spacing: var(--type-caption-ls); font-weight: var(--type-caption-weight); text-transform: uppercase; }

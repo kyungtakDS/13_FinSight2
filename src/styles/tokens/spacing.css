@@ -1,0 +1,16 @@
+/* FinSight2 — Spacing tokens. Base unit 8px. */
+:root {
+  --space-hair: 1px;
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;   /* color-block interior padding */
+  --space-section: 96px; /* universal vertical rhythm between major sections */
+
+  --container-max: 1280px; /* max content width */
+  --gutter-desktop: 48px;
+  --gutter-mobile: 24px;
+}

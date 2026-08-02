@@ -1,0 +1,10 @@
+/* FinSight2 — Border radius tokens. Pill is the only button shape. */
+:root {
+  --radius-xs: 2px;    /* anchor / link decoration corners */
+  --radius-sm: 6px;    /* small chips, sub-nav tabs, sticky-note thumbnails */
+  --radius-md: 8px;    /* form inputs, list items, image frames */
+  --radius-lg: 24px;   /* pricing cards, color-block sections, large image containers */
+  --radius-xl: 32px;   /* hero feature panels, oversized callouts */
+  --radius-pill: 50px; /* all text CTAs */
+  --radius-full: 9999px; /* circular icon buttons, checkmark glyphs */
+}
