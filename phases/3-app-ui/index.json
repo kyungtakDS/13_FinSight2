@@ -32,7 +32,7 @@
       "status": "completed",
       "summary": "components/report/{ProcessingPanel,FailedPanel,StatusPoller}.tsx + dashboard/uploads/[id]/page.tsx가 status로 분기. 진행바 indeterminate(퍼센트·aria-valuenow 없음), 탭을 닫아도 계속 문구, expired면 재시도 버튼 제거, step 1 에러 매핑 재사용, 2초 폴링·종료 조건·10분 상한·실패 시 무음. completed는 자리표시.",
       "started_at": "2026-08-04T16:52:05+0900",
-      "completed_at": "2026-08-04T16:57:00+0900"
+      "completed_at": "2026-08-04T16:58:41+0900"
     },
     {
       "step": 4,
