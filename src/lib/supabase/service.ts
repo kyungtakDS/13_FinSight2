@@ -148,6 +148,37 @@ export async function updateUploadForUser(
   }
 }
 
+/**
+ * 재시도 슬롯을 선점한다. 관측한 status·retry_count 를 UPDATE 의 WHERE 에 그대로 실어
+ * 비교-교환으로 처리한다 — 읽고 나서 쓰면 동시 요청 둘이 같은 retry_count 를 읽고
+ * 둘 다 분석을 띄워 한도가 뚫리고 LLM 비용이 두 번 나간다.
+ * 갱신된 행이 없으면 다른 요청이 먼저 가져간 것이므로 false.
+ */
+export async function claimUploadRetry(
+  userId: string,
+  uploadId: string,
+  expectedRetryCount: number,
+): Promise<boolean> {
+  const { data, error } = await createServiceClient()
+    .from("uploads")
+    .update({
+      retry_count: expectedRetryCount + 1,
+      status: "processing",
+      error_code: null,
+      finished_at: null,
+    })
+    .eq("user_id", userId)
+    .eq("id", uploadId)
+    .eq("status", "failed")
+    .eq("retry_count", expectedRetryCount)
+    .select("id");
+
+  if (error) {
+    throw error;
+  }
+  return (data ?? []).length > 0;
+}
+
 export async function insertTransactionsForUser(
   userId: string,
   uploadId: string,

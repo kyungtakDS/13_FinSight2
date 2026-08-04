@@ -66,6 +66,7 @@ describe("service-role Supabase access", () => {
       "getProfilePlan",
       "getUploadForUser",
       "updateUploadForUser",
+      "claimUploadRetry",
       "insertTransactionsForUser",
       "deleteTransactionsForUser",
       "downloadOriginalForUser",
@@ -134,6 +135,35 @@ describe("service-role Supabase access", () => {
     expect(query.update).toHaveBeenCalledWith({ status: "completed" });
     expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
     expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
+  });
+
+  it("claims a retry with a compare-and-swap on status and retry_count", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [{ id: "upload-1" }], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRetry } = await import("./service");
+
+    await expect(claimUploadRetry("user-1", "upload-1", 1)).resolves.toBe(true);
+
+    expect(query.update).toHaveBeenCalledWith({
+      retry_count: 2,
+      status: "processing",
+      error_code: null,
+      finished_at: null,
+    });
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
+    expect(query.eq).toHaveBeenCalledWith("status", "failed");
+    expect(query.eq).toHaveBeenCalledWith("retry_count", 1);
+  });
+
+  it("reports a lost retry race when the guarded update matches no row", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRetry } = await import("./service");
+
+    await expect(claimUploadRetry("user-1", "upload-1", 0)).resolves.toBe(false);
   });
 
   it("inserts transaction rows with user and upload ownership", async () => {

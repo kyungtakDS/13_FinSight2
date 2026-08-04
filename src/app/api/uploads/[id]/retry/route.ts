@@ -3,8 +3,8 @@ import { after } from "next/server";
 import { runAnalysis } from "@/lib/analysis/run-analysis";
 import { getUser } from "@/lib/supabase/server";
 import {
+  claimUploadRetry,
   getUploadForUser,
-  updateUploadForUser,
 } from "@/lib/supabase/service";
 
 export const runtime = "nodejs";
@@ -36,12 +36,10 @@ export async function POST(req: Request, ctx: RouteContext): Promise<Response> {
     }
 
     const nextRetryCount = upload.retryCount + 1;
-    await updateUploadForUser(user.id, id, {
-      retryCount: nextRetryCount,
-      status: "processing",
-      errorCode: null,
-      finishedAt: null,
-    });
+    const claimed = await claimUploadRetry(user.id, id, upload.retryCount);
+    if (!claimed) {
+      return Response.json({ error: "analysis_failed" }, { status: 409 });
+    }
     const accepted = Response.json(
       { retriesLeft: 2 - nextRetryCount },
       { status: 202 },

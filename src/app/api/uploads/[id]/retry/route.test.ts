@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getUser: vi.fn(),
   getUploadForUser: vi.fn(),
   updateUploadForUser: vi.fn(),
+  claimUploadRetry: vi.fn(),
   runAnalysis: vi.fn(),
   after: vi.fn(),
 }));
@@ -12,6 +13,7 @@ vi.mock("@/lib/supabase/server", () => ({ getUser: mocks.getUser }));
 vi.mock("@/lib/supabase/service", () => ({
   getUploadForUser: mocks.getUploadForUser,
   updateUploadForUser: mocks.updateUploadForUser,
+  claimUploadRetry: mocks.claimUploadRetry,
 }));
 vi.mock("@/lib/analysis/run-analysis", () => ({ runAnalysis: mocks.runAnalysis }));
 vi.mock("next/server", () => ({ after: mocks.after }));
@@ -39,6 +41,7 @@ describe("POST /api/uploads/[id]/retry", () => {
     mocks.getUser.mockResolvedValue({ id: USER_ID });
     mocks.getUploadForUser.mockResolvedValue(upload());
     mocks.updateUploadForUser.mockResolvedValue(undefined);
+    mocks.claimUploadRetry.mockResolvedValue(true);
     mocks.runAnalysis.mockResolvedValue(undefined);
     mocks.after.mockImplementation(() => undefined);
   });
@@ -59,7 +62,7 @@ describe("POST /api/uploads/[id]/retry", () => {
     mocks.getUploadForUser.mockResolvedValue(upload({ status }));
     const { POST } = await import("./route");
     expect((await POST(request(), ctx)).status).toBe(409);
-    expect(mocks.updateUploadForUser).not.toHaveBeenCalled();
+    expect(mocks.claimUploadRetry).not.toHaveBeenCalled();
   });
 
   it("6. rejects retry_count 2 with fixed vocabulary and no retries left", async () => {
@@ -69,26 +72,26 @@ describe("POST /api/uploads/[id]/retry", () => {
     expect([response.status, await response.json()]).toEqual([409, { error: "analysis_failed", retriesLeft: 0 }]);
   });
 
-  it("7. increments retry_count", async () => {
+  it("7. increments retry_count from the count it observed", async () => {
     const { POST } = await import("./route");
     await POST(request(), ctx);
-    expect(mocks.updateUploadForUser).toHaveBeenCalledWith(USER_ID, UPLOAD_ID, expect.objectContaining({ retryCount: 1 }));
+    expect(mocks.claimUploadRetry).toHaveBeenCalledWith(USER_ID, UPLOAD_ID, 0);
   });
 
   it("8. persists the transition before scheduling after", async () => {
     const order: string[] = [];
-    mocks.updateUploadForUser.mockImplementation(async () => { order.push("update"); });
+    mocks.claimUploadRetry.mockImplementation(async () => { order.push("claim"); return true; });
     mocks.after.mockImplementation(() => { order.push("after"); });
     const { POST } = await import("./route");
     await POST(request(), ctx);
-    expect(order).toEqual(["update", "after"]);
+    expect(order).toEqual(["claim", "after"]);
   });
 
-  it("9. changes count and status in one update", async () => {
+  it("9. changes count and status in one guarded update", async () => {
     const { POST } = await import("./route");
     await POST(request(), ctx);
-    expect(mocks.updateUploadForUser).toHaveBeenCalledTimes(1);
-    expect(mocks.updateUploadForUser).toHaveBeenCalledWith(USER_ID, UPLOAD_ID, expect.objectContaining({ retryCount: 1, status: "processing" }));
+    expect(mocks.claimUploadRetry).toHaveBeenCalledTimes(1);
+    expect(mocks.updateUploadForUser).not.toHaveBeenCalled();
   });
 
   it("10. returns the remaining retry count", async () => {
@@ -111,7 +114,7 @@ describe("POST /api/uploads/[id]/retry", () => {
     mocks.getUploadForUser.mockResolvedValue(upload({ storagePath: null }));
     const { POST } = await import("./route");
     await POST(request(), ctx);
-    expect(mocks.updateUploadForUser).not.toHaveBeenCalled();
+    expect(mocks.claimUploadRetry).not.toHaveBeenCalled();
   });
 
   it("13. checks expiry before retry exhaustion", async () => {
@@ -139,24 +142,48 @@ describe("POST /api/uploads/[id]/retry", () => {
     expect((await POST(request(), ctx)).status).toBe(202);
   });
 
-  it("17-18. clears error_code and finished_at", async () => {
+  it("17-18. rejects a lost claim with fixed vocabulary and no analysis", async () => {
+    mocks.claimUploadRetry.mockResolvedValue(false);
     const { POST } = await import("./route");
-    await POST(request(), ctx);
-    expect(mocks.updateUploadForUser).toHaveBeenCalledWith(USER_ID, UPLOAD_ID, expect.objectContaining({ errorCode: null, finishedAt: null }));
+    const response = await POST(request(), ctx);
+    expect([response.status, await response.json()]).toEqual([409, { error: "analysis_failed" }]);
+    expect(mocks.after).not.toHaveBeenCalled();
   });
 
   it("19. rejects the immediate second request after the first changes status", async () => {
     let current = upload();
     mocks.getUploadForUser.mockImplementation(async () => current);
-    mocks.updateUploadForUser.mockImplementation(async (_userId, _id, patch) => { current = { ...current, ...patch }; });
+    mocks.claimUploadRetry.mockImplementation(async (_userId, _id, expected) => {
+      if (current.status !== "failed" || current.retryCount !== expected) return false;
+      current = { ...current, status: "processing", retryCount: expected + 1 };
+      return true;
+    });
     const { POST } = await import("./route");
     expect((await POST(request(), ctx)).status).toBe(202);
     expect((await POST(request(), ctx)).status).toBe(409);
     expect(mocks.after).toHaveBeenCalledTimes(1);
   });
 
+  it("21. lets only one of two concurrent retries win the claim", async () => {
+    const stored = upload();
+    mocks.getUploadForUser.mockResolvedValue(stored);
+    let claimed = false;
+    mocks.claimUploadRetry.mockImplementation(async (_userId, _id, expected) => {
+      await Promise.resolve();
+      if (claimed || stored.retryCount !== expected) return false;
+      claimed = true;
+      return true;
+    });
+    const { POST } = await import("./route");
+
+    const [first, second] = await Promise.all([POST(request(), ctx), POST(request(), ctx)]);
+
+    expect([first.status, second.status].sort()).toEqual([202, 409]);
+    expect(mocks.after).toHaveBeenCalledTimes(1);
+  });
+
   it("20. logs no filename or merchant data", async () => {
-    mocks.updateUploadForUser.mockRejectedValue(new Error("PRIVATE_FILE.csv UNIQUE_MERCHANT"));
+    mocks.claimUploadRetry.mockRejectedValue(new Error("PRIVATE_FILE.csv UNIQUE_MERCHANT"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { POST } = await import("./route");
     await POST(request(), ctx);
