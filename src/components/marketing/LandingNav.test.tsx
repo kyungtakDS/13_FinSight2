@@ -28,4 +28,13 @@ describe("LandingNav", () => {
     expect(screen.getByRole("button", { name: "로그인" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "무료로 시작하기" })).toBeInTheDocument();
   });
+
+  it("constrains the login button so the nav stays on one row", () => {
+    render(<LandingNav />);
+    // .fs-google is an app-layer class with width: 100%; unconstrained it fills
+    // the nav row and forces the header to wrap onto three lines.
+    expect(screen.getByRole("button", { name: "로그인" }).parentElement).toHaveStyle({
+      width: "max-content",
+    });
+  });
 });

@@ -15,7 +15,11 @@ export function LandingNav() {
           <a className="t-body-sm" href="#pricing" style={{ color: "var(--color-ink)" }}>가격</a>
           <a className="t-body-sm" href="#data" style={{ color: "var(--color-ink)" }}>데이터 처리</a>
           <ThemeToggle />
-          <GoogleSignInButton />
+          {/* .fs-google is an app-layer class with width: 100%. Left unconstrained
+              it fills the nav row and wraps the header onto three lines. */}
+          <span style={{ width: "max-content" }}>
+            <GoogleSignInButton />
+          </span>
           <Button href="#start">무료로 시작하기</Button>
         </div>
       </nav>
