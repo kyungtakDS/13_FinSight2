@@ -45,7 +45,10 @@
     {
       "step": 5,
       "name": "uploads-export",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-04T15:45:15+0900",
+      "summary": "app/api/uploads/[id]/export/route.ts — GET: 401→404→402(payment_required, 거래 조회·생성 전)→409(미완료)→CSV. UTF-8 BOM, CSV 인젝션 이스케이프, 한글 계정과목/판정 라벨, reason은 merchant_dictionary 조회·조인, 취소 음수 보존, uncertain 포함, 세무 고지 행, 파일명 서버 생성. Phase 2 검토 지점: ANTHROPIC_API_KEY로 LLM 호출 2곳 실측 필요 (mock과 실제 SDK 괴리 확인)",
+      "completed_at": "2026-08-04T15:48:45+0900"
     }
   ],
   "created_at": "2026-08-04T15:23:35+0900"
