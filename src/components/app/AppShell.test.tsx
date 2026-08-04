@@ -38,6 +38,9 @@ const componentSources = [
   "upload/DetectCard.tsx",
   "upload/EmptyState.tsx",
   "upload/UploadList.tsx",
+  "report/ProcessingPanel.tsx",
+  "report/FailedPanel.tsx",
+  "report/StatusPoller.tsx",
 ];
 const allowedWeights = new Set(["320", "330", "340", "450", "480", "540", "700"]);
 
