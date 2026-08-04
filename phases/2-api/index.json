@@ -2,11 +2,38 @@
   "project": "FinSight2",
   "phase": "2-api",
   "steps": [
-    { "step": 0, "name": "gate", "status": "pending" },
-    { "step": 1, "name": "analysis-pipeline", "status": "pending" },
-    { "step": 2, "name": "uploads-ingest", "status": "pending" },
-    { "step": 3, "name": "uploads-detail", "status": "pending" },
-    { "step": 4, "name": "uploads-retry", "status": "pending" },
-    { "step": 5, "name": "uploads-export", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "gate",
+      "status": "completed",
+      "started_at": "2026-08-04T15:23:35+0900",
+      "summary": "lib/gate.ts — viewScope(plan)과 gateReport(plan, summary, txns). free는 transactions 길이 0 + lockedTxnCount + insights 앞 3개, summary 합계는 그대로. 알 수 없는 plan은 free. 순수 함수 — plan은 라우트가 DB에서 읽어 넘긴다"
+    },
+    {
+      "step": 1,
+      "name": "analysis-pipeline",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "uploads-ingest",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "uploads-detail",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "uploads-retry",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "uploads-export",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-04T15:23:35+0900"
 }
