@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "landing",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-04T19:20:13+0900",
+      "summary": "app/page.tsx 랜딩 완성 + components/marketing/{LandingNav,Hero,Steps,Pricing}.tsx. nav→마퀴→히어로→ColorBlock 3개(lime/navy/coral, 사이에 흰 캔버스)→4단계→가격 2티어(횟수 문구 없음, ₩9,900 상수 한 곳)→세무 고지·데이터 처리·90일·해지 정책→푸터. magenta CTA 없음, 익명 진입 경로 없음",
+      "completed_at": "2026-08-04T19:25:00+0900"
     },
     {
       "step": 2,
