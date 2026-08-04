@@ -172,6 +172,21 @@ export async function insertTransactionsForUser(
   }
 }
 
+export async function deleteTransactionsForUser(
+  userId: string,
+  uploadId: string,
+): Promise<void> {
+  const { error } = await createServiceClient()
+    .from("transactions")
+    .delete()
+    .eq("user_id", userId)
+    .eq("upload_id", uploadId);
+
+  if (error) {
+    throw error;
+  }
+}
+
 export async function downloadOriginalForUser(
   userId: string,
   storagePath: string,

@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "analysis-pipeline",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-04T15:27:23+0900",
+      "summary": "lib/analysis/run-analysis.ts — runAnalysis(userId, uploadId). Storage→decode/parse→fingerprint→format cache (LLM only on miss)→normalize→dictionary cache (LLM only for misses)→dictionary upsert→transaction replacement→aggregate→upload completion; never rejects, maps failures to fixed error codes, and logs metadata only.",
+      "completed_at": "2026-08-04T15:31:29+0900"
     },
     {
       "step": 2,

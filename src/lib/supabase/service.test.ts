@@ -23,11 +23,13 @@ function queryResult(data: unknown = null) {
     maybeSingle: vi.fn(),
     update: vi.fn(),
     insert: vi.fn(),
+    delete: vi.fn(),
   };
   chain.select.mockReturnValue(chain);
   chain.eq.mockReturnValue(chain);
   chain.update.mockReturnValue(chain);
   chain.insert.mockReturnValue(chain);
+  chain.delete.mockReturnValue(chain);
   chain.single.mockResolvedValue({ data, error: null });
   chain.maybeSingle.mockResolvedValue({ data, error: null });
   return chain;
@@ -65,6 +67,7 @@ describe("service-role Supabase access", () => {
       "getUploadForUser",
       "updateUploadForUser",
       "insertTransactionsForUser",
+      "deleteTransactionsForUser",
       "downloadOriginalForUser",
       "deleteOriginalForUser",
     ] as const;
@@ -162,6 +165,20 @@ describe("service-role Supabase access", () => {
         verdict: "expense",
       },
     ]);
+  });
+
+  it("deletes prior transaction rows within both user and upload scope", async () => {
+    const query = queryResult();
+    query.eq.mockReturnValueOnce(query).mockResolvedValueOnce({ error: null });
+    mocks.from.mockReturnValue(query);
+    const { deleteTransactionsForUser } = await import("./service");
+
+    await deleteTransactionsForUser("user-1", "upload-1");
+
+    expect(mocks.from).toHaveBeenCalledWith("transactions");
+    expect(query.delete).toHaveBeenCalledOnce();
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("upload_id", "upload-1");
   });
 
   it("rejects cross-user storage paths before touching storage", async () => {
