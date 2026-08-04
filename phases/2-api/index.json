@@ -40,7 +40,7 @@
       "status": "completed",
       "started_at": "2026-08-04T15:41:57+0900",
       "summary": "app/api/uploads/[id]/retry/route.ts — POST: user-scoped 404, expiry-first rejection, failed-state and retry-limit checks, atomic retry transition, 202 with retriesLeft, then after(runAnalysis); no advisory lock.",
-      "completed_at": "2026-08-04T15:44:30+0900"
+      "completed_at": "2026-08-04T15:45:14+0900"
     },
     {
       "step": 5,
