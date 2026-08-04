@@ -108,12 +108,12 @@ Phase 진행을 막지 않는 것이다. 이 구분이 곧 "지금 Phase 1을 �
 
 | # | 항목 | 구분 | 언제 | 막는 것 |
 |---|---|---|---|---|
-| B-1 | `middleware` → `proxy` 전환 결정 | **blocker** | **Phase 2 시작 전** | Phase 2가 미들웨어를 다시 건드린다 |
-| B-2 | Supabase DB 마이그레이션 적용 · Google OAuth provider 설정 | **blocker (환경)** | Phase 3 검증 전 | 로그인·업로드를 브라우저로 확인할 수 없다 |
-| B-3 | **실제 카드사 CSV 2~3개로 파싱 검증** | **blocker (사람만 가능)** | **Phase 2 시작 전 권장** | 틀리면 Phase 2 이후가 전부 흔들린다 |
+| B-1 | `middleware` → `proxy` 전환 결정 | ~~blocker~~ → **해결 (2026-08-04)** | — | 없음. **현행 유지로 결정** (아래 참고) |
+| B-2 | Supabase DB 마이그레이션 적용 · Google OAuth provider 설정 | **blocker (환경)** | **Phase 5 검증 전** | 로그인·업로드·결제를 브라우저로 확인할 수 없다 |
+| B-3 | **실제 카드사 CSV 2~3개로 파싱 검증** | **blocker (사람만 가능)** | 아직 미수행 | 틀리면 파싱 이후가 전부 흔들린다 |
 | F-1 | `0004_expiry_cron.sql` 실제 동작 확인 | 후속 | B-2 완료 후 | 없음 (Phase 진행을 막지 않음) |
 | F-2 | `execute.py` 경과 시간 표시 버그 | 후속 | 아무 때나 | 없음 (표시만의 문제) |
-| F-3 | `tdd-guard.test.mjs` 픽스처 충돌 (3 fail) | 후속 | Phase 2 전 권장 | 없음 (가드 자체는 정상) |
+| F-3 | `tdd-guard.test.mjs` 픽스처 충돌 | ~~후속~~ → **해결 (2026-08-04)** | — | 없음. 32 passed / 0 failed |
 
 Phase 0·1은 위 항목들에 막히지 않고 완료됐다 — 순수 로직과 mock뿐이라
 DB·OAuth·미들웨어와 무관하다(ADR-018).
@@ -161,7 +161,23 @@ npx tsx -e "
 
 **결과는 이 문서에 수치로만 기록한다** — 가맹점명·금액을 적지 마라.
 
-### B-1. `middleware` → `proxy` 전환 결정 — Phase 2 시작 전
+### B-1. `middleware` → `proxy` 전환 결정 — **결정됨: (a) 현행 유지 (2026-08-04)**
+
+> **결정: `src/middleware.ts`를 그대로 둔다. `src/proxy.ts`를 만들지 않는다.**
+>
+> 근거: 빌드·동작 모두 정상이고 깨지는 것이 없다. 전환하면 `ARCHITECTURE.md` §디렉토리 구조 ·
+> `AGENTS.md`의 tdd-guard 예외 문구 · `tdd-guard.mjs`의 면제 규칙까지 **문서 3곳을 함께** 고쳐야 하는데,
+> 그 대가로 얻는 것은 deprecation 경고 하나가 사라지는 것뿐이다. Next가 실제로 `middleware` 관례를
+> 제거할 때 옮긴다.
+>
+> 따라서 아래 「선택지」는 (a)로 확정됐고, `AGENTS.md`의 *"`src/middleware.ts`는 tdd-guard 면제가
+> 아니다"* 규칙과 `ARCHITECTURE.md`의 `src/middleware.ts` 표기는 **그대로 유효하다.**
+>
+> 남는 것: `next build`·`next dev`가 계속 deprecation 경고를 출력한다. 이건 알려진 잡음이며
+> 빌드 실패가 아니다. Next 메이저 업그레이드 시 이 항목을 다시 연다.
+
+아래는 결정 당시의 배경이다.
+
 
 `next build`가 경고를 낸다:
 
@@ -185,7 +201,7 @@ Phase 2 시작 전에 정해야 하는 이유: Phase 2의 게이트·라우트�
   `tdd-guard.mjs`의 면제 규칙까지 함께 고친다. 파일명이 바뀌므로 tdd-guard가 `proxy.ts`를
   면제로 착각하지 않는지 확인해야 한다.
 
-**결정 주체는 사람이다.** 결정 전에는 Phase 2를 시작하지 마라.
+~~**결정 주체는 사람이다.** 결정 전에는 Phase 2를 시작하지 마라.~~ → 위 결정 블록으로 종결.
 
 ### B-2. Supabase 적용 · Google OAuth — 환경 설정
 
@@ -215,7 +231,25 @@ Storage 콘솔에서 객체가 실제로 사라졌는지 **눈으로** 본다. `
 사라지지 않으면 pg_cron에서 Storage API를 호출하는 방식(Edge Function 등)으로 바꿔야 하며,
 그건 ADR-005의 "새 인프라가 늘지 않는다"는 근거를 재검토하게 만든다.
 
-### F-3. `tdd-guard.test.mjs` 픽스처 충돌 — Phase 2 전 권장
+### F-3. `tdd-guard.test.mjs` 픽스처 충돌 — **해결됨 (2026-08-04)**
+
+> **결과: 32 passed / 0 failed.** Phase 4 종료 시점에 실패가 3건에서 **6건**까지 늘어 있었다
+> (`normalize.ts` · `route.ts` · `middleware.ts` + `apply_patch` 변형 3종) — Phase 2가
+> `route.test.ts`를, Phase 0 step 5가 `middleware.test.ts`를 정당하게 만들었기 때문이다.
+>
+> **고친 것은 테스트뿐이고 `tdd-guard.mjs`는 한 줄도 바꾸지 않았다.** 아래 진단대로 낡은 것은
+> 가드가 아니라 기대값이었고, 구현을 고쳤다면 오히려 올바른 동작을 깨뜨렸을 것이다.
+>
+> 채택한 방법은 아래 「고치는 법」(고정 더미 파일명)이 아니라 **빈 임시 루트에서 돌리기**다.
+> 더미 파일명은 "그 이름이 영원히 안 생긴다"는 약속에 기대지만, 임시 루트는 테스트가 스스로
+> 만든 빈 디렉토리라 레포가 어떻게 자라든 영향을 받지 않는다. 검증하려는 것도 정확히
+> *"이 경로 모양이 면제 목록에 없다"*이지 *"레포에 테스트가 없다"*가 아니다.
+>
+> 회귀 방지 확인 — 수정 후 실제 레포에 대고 훅을 직접 호출해 동작이 그대로임을 확인했다:
+> 테스트 없는 새 경로 → DENY · 테스트 있는 경로 → ALLOW · `middleware.ts` → ALLOW(테스트 존재) ·
+> 테스트 없는 새 라우트 → DENY · `page.tsx` → ALLOW(면제) · 레포 밖 → ALLOW.
+
+아래는 진단 당시의 기록이다.
 
 Phase 1 이후 `node scripts/hooks/tdd-guard.test.mjs`가 **25 passed, 3 failed**가 됐다
 (Phase 0 시점에는 28/28 통과).
