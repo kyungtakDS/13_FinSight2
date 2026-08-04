@@ -7,7 +7,8 @@
       "name": "marketing-components",
       "status": "completed",
       "started_at": "2026-08-04T19:14:10+0900",
-      "summary": "components/marketing/ 7개(Button/IconButton/TextInput/ColorBlock/PricingCard/MarqueeStrip/Footer). DESIGN.md §4 표의 prop만 수용(rest spread 없음), ColorBlock·IconButton inverse는 고정 잉크 토큰·MarqueeStrip은 반전 토큰. 금지 6개 미구현. ds-bundle.js 미사용"
+      "summary": "components/marketing/ 7개(Button/IconButton/TextInput/ColorBlock/PricingCard/MarqueeStrip/Footer). DESIGN.md §4 표의 prop만 수용(rest spread 없음), ColorBlock·IconButton inverse는 고정 잉크 토큰·MarqueeStrip은 반전 토큰. 금지 6개 미구현. ds-bundle.js 미사용",
+      "completed_at": "2026-08-04T19:20:12+0900"
     },
     {
       "step": 1,
