@@ -48,6 +48,8 @@ const componentSources = [
   "report/InsightList.tsx",
   "report/AccountDonut.tsx",
   "report/Disclaimer.tsx",
+  "report/TransactionTable.tsx",
+  "report/LockedTable.tsx",
 ];
 const allowedWeights = new Set(["320", "330", "340", "450", "480", "540", "700"]);
 

@@ -1,10 +1,11 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUser, getUploadForUser, getProfilePlan, notFound } = vi.hoisted(() => ({
+const { getUser, getUploadForUser, getProfilePlan, createClient, notFound } = vi.hoisted(() => ({
   getUser: vi.fn(),
   getUploadForUser: vi.fn(),
   getProfilePlan: vi.fn(),
+  createClient: vi.fn(),
   notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }),
 }));
 
@@ -12,7 +13,7 @@ vi.mock("next/navigation", () => ({
   notFound,
   useRouter: () => ({ refresh: vi.fn() }),
 }));
-vi.mock("@/lib/supabase/server", () => ({ getUser }));
+vi.mock("@/lib/supabase/server", () => ({ getUser, createClient }));
 vi.mock("@/lib/supabase/service", () => ({ getUploadForUser, getProfilePlan }));
 
 import UploadPage from "./page";
@@ -41,6 +42,7 @@ describe("upload status page", () => {
     getUser.mockResolvedValue({ id: "user-1" });
     getUploadForUser.mockResolvedValue(upload);
     getProfilePlan.mockResolvedValue("free");
+    createClient.mockReset();
   });
   afterEach(() => {
     cleanup();
@@ -70,6 +72,32 @@ describe("upload status page", () => {
     expect(screen.getByText(/애매 1건/)).toBeInTheDocument();
     expect(screen.getAllByRole("article")).toHaveLength(3);
     expect(getProfilePlan).toHaveBeenCalledWith("user-1");
+    expect(screen.getByText(/거래 4건의 계정과목/)).toBeInTheDocument();
+    expect(createClient).not.toHaveBeenCalled();
+    expect(document.body).not.toHaveTextContent("비밀가맹점");
+  });
+
+  it("queries and renders transactions only for Pro", async () => {
+    getProfilePlan.mockResolvedValue("pro");
+    getUploadForUser.mockResolvedValue({ ...upload, status: "completed", rowCount: 1, summary: {
+      expenseTotal: 10000, personalTotal: 0, uncertainCount: 0, uncertainTotal: 0,
+      estimatedSaving: 660, taxRate: 0.066, txnCount: 1, accounts: [], insights: [],
+    } });
+    const results = {
+      transactions: [{ row_index: 1, txn_date: "2026-01-02", merchant: "비밀가맹점", amount: 10000, account_code: "welfare", verdict: "expense" }],
+      merchant_dictionary: [{ merchant_key: "비밀가맹점", reason: "업무 목적" }],
+    };
+    createClient.mockResolvedValue({
+      from: (table: keyof typeof results) => {
+        const chain = { select: () => chain, eq: () => chain, order: () => chain, in: () => chain,
+          then: (resolve: (value: unknown) => unknown) => resolve({ data: results[table], error: null }) };
+        return chain;
+      },
+    });
+    render(await UploadPage({ params: Promise.resolve({ id: "upload-1" }) }));
+    expect(screen.getByRole("table")).toHaveTextContent("비밀가맹점");
+    expect(screen.getByRole("table")).toHaveTextContent("업무 목적");
+    expect(screen.queryByRole("link", { name: "Pro 시작하기" })).not.toBeInTheDocument();
   });
 
   it("uses notFound for an unknown or another user's upload", async () => {
