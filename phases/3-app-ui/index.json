@@ -40,7 +40,7 @@
       "status": "completed",
       "summary": "components/report/{ReportHeader,SavingsHero,MetricRow,UncertainBanner,InsightList,AccountDonut,Disclaimer}.tsx + src/components/report/format.ts(금액 포맷 공용 — step 5 재사용). 전부 props 전용, SVG stroke-dasharray 도넛(--fs-chart-1..6 순환), 3건 이하면 표, 빈 데이터 미렌더, 애매 배너 상시 노출, 세무 고지 및 completed 페이지 조립 — 거래 표 자리는 step 5.",
       "started_at": "2026-08-04T16:58:42+0900",
-      "completed_at": "2026-08-04T17:05:00+0900"
+      "completed_at": "2026-08-04T17:06:02+0900"
     },
     {
       "step": 5,
