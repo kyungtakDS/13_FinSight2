@@ -21,7 +21,10 @@
     {
       "step": 2,
       "name": "uploads-history",
-      "status": "pending"
+      "status": "completed",
+      "summary": "components/upload/UploadList.tsx(props 전용) + dashboard/page.tsx가 서버에서 목록을 읽어 조립. 기간·거래 수로 식별하고 processing은 퍼센트·폴링 없이 표시하며, 만료 원본은 재시도 불가를 안내하고 삭제는 인라인 확인 후 DELETE. 실제 table + .fs-tablewrap.",
+      "started_at": "2026-08-04T16:47:41+0900",
+      "completed_at": "2026-08-04T16:50:55+0900"
     },
     {
       "step": 3,

@@ -37,6 +37,7 @@ const componentSources = [
   "upload/Dropzone.tsx",
   "upload/DetectCard.tsx",
   "upload/EmptyState.tsx",
+  "upload/UploadList.tsx",
 ];
 const allowedWeights = new Set(["320", "330", "340", "450", "480", "540", "700"]);
 
