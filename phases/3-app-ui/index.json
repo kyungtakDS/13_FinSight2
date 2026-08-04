@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "upload-dropzone",
-      "status": "pending"
+      "status": "completed",
+      "summary": "lib/csv/preview.ts(의존성 0, 브라우저 TextDecoder) + components/upload/{Dropzone,DetectCard,EmptyState}.tsx. 파일 선택→판별 카드→'분석 시작'에서만 POST, 409면 기존 분석 링크, 에러 문구는 고정 어휘 7개 매핑(src/components/upload/Dropzone.tsx의 ERROR_MESSAGES) — Phase 3 step 3이 재사용.",
+      "started_at": "2026-08-04T16:43:10+0900",
+      "completed_at": "2026-08-04T16:46:40+0900"
     },
     {
       "step": 2,

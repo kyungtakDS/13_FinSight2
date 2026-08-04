@@ -30,12 +30,19 @@ describe("AppShell", () => {
   });
 });
 
-const componentSources = ["AppShell.tsx", "Sidebar.tsx", "Topbar.tsx"];
+const componentSources = [
+  "app/AppShell.tsx",
+  "app/Sidebar.tsx",
+  "app/Topbar.tsx",
+  "upload/Dropzone.tsx",
+  "upload/DetectCard.tsx",
+  "upload/EmptyState.tsx",
+];
 const allowedWeights = new Set(["320", "330", "340", "450", "480", "540", "700"]);
 
 describe("app component design rules", () => {
   it.each(componentSources)("keeps %s within the shared design rules", (filename) => {
-    const source = readFileSync(resolve("src/components/app", filename), "utf8");
+    const source = readFileSync(resolve("src/components", filename), "utf8");
     const declaredWeights = [...source.matchAll(/fontWeight:\s*["']?(\d+)/g)].map(
       ([, weight]) => weight,
     );
