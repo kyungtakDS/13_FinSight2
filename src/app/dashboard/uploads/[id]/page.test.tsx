@@ -1,9 +1,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUser, getUploadForUser, notFound } = vi.hoisted(() => ({
+const { getUser, getUploadForUser, getProfilePlan, notFound } = vi.hoisted(() => ({
   getUser: vi.fn(),
   getUploadForUser: vi.fn(),
+  getProfilePlan: vi.fn(),
   notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }),
 }));
 
@@ -12,7 +13,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
 }));
 vi.mock("@/lib/supabase/server", () => ({ getUser }));
-vi.mock("@/lib/supabase/service", () => ({ getUploadForUser }));
+vi.mock("@/lib/supabase/service", () => ({ getUploadForUser, getProfilePlan }));
 
 import UploadPage from "./page";
 
@@ -39,6 +40,7 @@ describe("upload status page", () => {
   beforeEach(() => {
     getUser.mockResolvedValue({ id: "user-1" });
     getUploadForUser.mockResolvedValue(upload);
+    getProfilePlan.mockResolvedValue("free");
   });
   afterEach(() => {
     cleanup();
@@ -57,10 +59,17 @@ describe("upload status page", () => {
     expect(screen.getByRole("button", { name: /1회 남음/ })).toBeInTheDocument();
   });
 
-  it("leaves completed status as a report placeholder", async () => {
-    getUploadForUser.mockResolvedValue({ ...upload, status: "completed" });
+  it("assembles the completed report from a server-gated summary", async () => {
+    getUploadForUser.mockResolvedValue({ ...upload, status: "completed", periodStart: "2026-01-01", periodEnd: "2026-01-31", rowCount: 4, summary: {
+      expenseTotal: 100000, personalTotal: 20000, uncertainCount: 1, uncertainTotal: 3000,
+      estimatedSaving: 6600, taxRate: 0.066, txnCount: 4, accounts: [],
+      insights: Array.from({ length: 5 }, (_, i) => ({ id: `${i}`, title: `인사이트 ${i}`, body: `내용 ${i}` })),
+    } });
     render(await UploadPage({ params: Promise.resolve({ id: "upload-1" }) }));
-    expect(screen.getByRole("heading", { name: "리포트 준비가 완료되었습니다" })).toBeInTheDocument();
+    expect(screen.getByText("예상 절감액(참고용)")).toBeInTheDocument();
+    expect(screen.getByText(/애매 1건/)).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(getProfilePlan).toHaveBeenCalledWith("user-1");
   });
 
   it("uses notFound for an unknown or another user's upload", async () => {

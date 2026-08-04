@@ -41,6 +41,13 @@ const componentSources = [
   "report/ProcessingPanel.tsx",
   "report/FailedPanel.tsx",
   "report/StatusPoller.tsx",
+  "report/ReportHeader.tsx",
+  "report/SavingsHero.tsx",
+  "report/MetricRow.tsx",
+  "report/UncertainBanner.tsx",
+  "report/InsightList.tsx",
+  "report/AccountDonut.tsx",
+  "report/Disclaimer.tsx",
 ];
 const allowedWeights = new Set(["320", "330", "340", "450", "480", "540", "700"]);
 

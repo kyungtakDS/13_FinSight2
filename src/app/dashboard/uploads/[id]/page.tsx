@@ -1,10 +1,18 @@
 import { notFound } from "next/navigation";
 
+import { AccountDonut } from "@/components/report/AccountDonut";
+import { Disclaimer } from "@/components/report/Disclaimer";
 import { FailedPanel } from "@/components/report/FailedPanel";
+import { InsightList } from "@/components/report/InsightList";
+import { MetricRow } from "@/components/report/MetricRow";
 import { ProcessingPanel } from "@/components/report/ProcessingPanel";
+import { ReportHeader } from "@/components/report/ReportHeader";
+import { SavingsHero } from "@/components/report/SavingsHero";
 import { StatusPoller } from "@/components/report/StatusPoller";
+import { UncertainBanner } from "@/components/report/UncertainBanner";
+import { gateReport } from "@/lib/gate";
 import { getUser } from "@/lib/supabase/server";
-import { getUploadForUser } from "@/lib/supabase/service";
+import { getProfilePlan, getUploadForUser } from "@/lib/supabase/service";
 
 type UploadPageProps = { params: Promise<{ id: string }> };
 
@@ -33,11 +41,18 @@ export default async function UploadPage({ params }: UploadPageProps) {
     );
   }
 
-  return (
-    <section className="fs-card" aria-labelledby="report-placeholder-title">
-      <span className="fs-eyebrow">분석 완료</span>
-      <h1 id="report-placeholder-title" className="fs-page-title">리포트 준비가 완료되었습니다</h1>
-      <p className="fs-muted">리포트 내용은 다음 단계에서 표시됩니다.</p>
-    </section>
-  );
+  if (!upload.summary) throw new Error("completed upload missing summary");
+  const plan = await getProfilePlan(user.id);
+  const { summary } = gateReport(plan, upload.summary, []);
+
+  return <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-xl)" }}>
+    <ReportHeader periodStart={upload.periodStart} periodEnd={upload.periodEnd} txnCount={summary.txnCount} />
+    <SavingsHero estimatedSaving={summary.estimatedSaving} taxRate={summary.taxRate} />
+    <MetricRow expenseTotal={summary.expenseTotal} personalTotal={summary.personalTotal} uncertainTotal={summary.uncertainTotal} />
+    <UncertainBanner uncertainCount={summary.uncertainCount} />
+    <InsightList insights={summary.insights} />
+    <AccountDonut accounts={summary.accounts} txnCount={summary.txnCount} />
+    <section aria-label="거래별 분류 내역" data-step="report-table-lock" />
+    <Disclaimer />
+  </div>;
 }
