@@ -2,11 +2,38 @@
   "project": "FinSight2",
   "phase": "3-app-ui",
   "steps": [
-    { "step": 0, "name": "app-shell", "status": "pending" },
-    { "step": 1, "name": "upload-dropzone", "status": "pending" },
-    { "step": 2, "name": "uploads-history", "status": "pending" },
-    { "step": 3, "name": "analysis-status", "status": "pending" },
-    { "step": 4, "name": "report-summary", "status": "pending" },
-    { "step": 5, "name": "report-table-lock", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "app-shell",
+      "status": "completed",
+      "summary": "components/app/{AppShell,Sidebar,Topbar}.tsx + dashboard/layout.tsx. theme.css 유틸 클래스만 사용, nav는 /dashboard·/upgrade 2개(설정 없음), 워드마크+도트 브랜드, 데이터 페칭 없음. 재사용 가능한 디자인 규율 공통 테스트: src/components/app/AppShell.test.tsx (componentSources 파일 목록 교체 방식).",
+      "started_at": "2026-08-04T16:39:19+0900"
+    },
+    {
+      "step": 1,
+      "name": "upload-dropzone",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "uploads-history",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "analysis-status",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "report-summary",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "report-table-lock",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-04T16:39:19+0900"
 }
