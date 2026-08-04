@@ -7,7 +7,8 @@
       "name": "gate",
       "status": "completed",
       "started_at": "2026-08-04T15:23:35+0900",
-      "summary": "lib/gate.ts — viewScope(plan)과 gateReport(plan, summary, txns). free는 transactions 길이 0 + lockedTxnCount + insights 앞 3개, summary 합계는 그대로. 알 수 없는 plan은 free. 순수 함수 — plan은 라우트가 DB에서 읽어 넘긴다"
+      "summary": "lib/gate.ts — viewScope(plan)과 gateReport(plan, summary, txns). free는 transactions 길이 0 + lockedTxnCount + insights 앞 3개, summary 합계는 그대로. 알 수 없는 plan은 free. 순수 함수 — plan은 라우트가 DB에서 읽어 넘긴다",
+      "completed_at": "2026-08-04T15:27:23+0900"
     },
     {
       "step": 1,
