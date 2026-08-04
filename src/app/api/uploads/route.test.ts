@@ -259,4 +259,30 @@ describe("/api/uploads", () => {
     expect(logs).not.toContain("UNIQUE-CSV-PII");
     error.mockRestore();
   });
+
+  // 미인증은 장애가 아니다. 401 로 나가야 클라이언트가 "로그인하라"를 알 수 있고,
+  // 500 으로 나가면 서버 장애로 오해한다.
+  it("25. rejects an unauthenticated GET with 401", async () => {
+    mocks.getUser.mockResolvedValue(null);
+    const { GET } = await import("./route");
+    const response = await GET(new Request("http://localhost/api/uploads"));
+    expect([response.status, await body(response)]).toEqual([401, { error: "upstream" }]);
+  });
+
+  it("26. does not query uploads for an unauthenticated GET", async () => {
+    mocks.getUser.mockResolvedValue(null);
+    const { GET } = await import("./route");
+    await GET(new Request("http://localhost/api/uploads"));
+    expect(mocks.from).not.toHaveBeenCalled();
+  });
+
+  // 반대로 진짜 실패(네트워크·토큰 검증·상류 장애)는 500 이어야 한다.
+  it("27. still returns 500 when the auth check itself fails", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.getUser.mockRejectedValue(new Error("auth upstream down"));
+    const { GET, POST } = await import("./route");
+    expect((await GET(new Request("http://localhost/api/uploads"))).status).toBe(500);
+    expect((await POST(request(csv()))).status).toBe(500);
+    error.mockRestore();
+  });
 });
