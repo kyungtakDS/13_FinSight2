@@ -2,11 +2,55 @@
   "project": "FinSight2",
   "phase": "3-app-ui",
   "steps": [
-    { "step": 0, "name": "app-shell", "status": "pending" },
-    { "step": 1, "name": "upload-dropzone", "status": "pending" },
-    { "step": 2, "name": "uploads-history", "status": "pending" },
-    { "step": 3, "name": "analysis-status", "status": "pending" },
-    { "step": 4, "name": "report-summary", "status": "pending" },
-    { "step": 5, "name": "report-table-lock", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "app-shell",
+      "status": "completed",
+      "summary": "components/app/{AppShell,Sidebar,Topbar}.tsx + dashboard/layout.tsx. theme.css 유틸 클래스만 사용, nav는 /dashboard·/upgrade 2개(설정 없음), 워드마크+도트 브랜드, 데이터 페칭 없음. 재사용 가능한 디자인 규율 공통 테스트: src/components/app/AppShell.test.tsx (componentSources 파일 목록 교체 방식).",
+      "started_at": "2026-08-04T16:39:19+0900",
+      "completed_at": "2026-08-04T16:43:09+0900"
+    },
+    {
+      "step": 1,
+      "name": "upload-dropzone",
+      "status": "completed",
+      "summary": "lib/csv/preview.ts(의존성 0, 브라우저 TextDecoder) + components/upload/{Dropzone,DetectCard,EmptyState}.tsx. 파일 선택→판별 카드→'분석 시작'에서만 POST, 409면 기존 분석 링크, 에러 문구는 고정 어휘 7개 매핑(src/components/upload/Dropzone.tsx의 ERROR_MESSAGES) — Phase 3 step 3이 재사용.",
+      "started_at": "2026-08-04T16:43:10+0900",
+      "completed_at": "2026-08-04T16:47:40+0900"
+    },
+    {
+      "step": 2,
+      "name": "uploads-history",
+      "status": "completed",
+      "summary": "components/upload/UploadList.tsx(props 전용) + dashboard/page.tsx가 서버에서 목록을 읽어 조립. 기간·거래 수로 식별하고 processing은 퍼센트·폴링 없이 표시하며, 만료 원본은 재시도 불가를 안내하고 삭제는 인라인 확인 후 DELETE. 실제 table + .fs-tablewrap.",
+      "started_at": "2026-08-04T16:47:41+0900",
+      "completed_at": "2026-08-04T16:52:05+0900"
+    },
+    {
+      "step": 3,
+      "name": "analysis-status",
+      "status": "completed",
+      "summary": "components/report/{ProcessingPanel,FailedPanel,StatusPoller}.tsx + dashboard/uploads/[id]/page.tsx가 status로 분기. 진행바 indeterminate(퍼센트·aria-valuenow 없음), 탭을 닫아도 계속 문구, expired면 재시도 버튼 제거, step 1 에러 매핑 재사용, 2초 폴링·종료 조건·10분 상한·실패 시 무음. completed는 자리표시.",
+      "started_at": "2026-08-04T16:52:05+0900",
+      "completed_at": "2026-08-04T16:58:41+0900"
+    },
+    {
+      "step": 4,
+      "name": "report-summary",
+      "status": "completed",
+      "summary": "components/report/{ReportHeader,SavingsHero,MetricRow,UncertainBanner,InsightList,AccountDonut,Disclaimer}.tsx + src/components/report/format.ts(금액 포맷 공용 — step 5 재사용). 전부 props 전용, SVG stroke-dasharray 도넛(--fs-chart-1..6 순환), 3건 이하면 표, 빈 데이터 미렌더, 애매 배너 상시 노출, 세무 고지 및 completed 페이지 조립 — 거래 표 자리는 step 5.",
+      "started_at": "2026-08-04T16:58:42+0900",
+      "completed_at": "2026-08-04T17:06:02+0900"
+    },
+    {
+      "step": 5,
+      "name": "report-table-lock",
+      "status": "completed",
+      "summary": "components/report/{TransactionTable,LockedTable}.tsx + page.tsx 표 자리 조립. TransactionTable은 실제 table+th scope+.fs-tablewrap, 취소 음수 부호+--fs-unsure, 칩 3값 고정. LockedTable은 lockedCount만 받는 시그니처(거래 prop 없음), 회색 스켈레톤 6행 aria-hidden, 스크림은 '무엇이 잠겼는지'부터 말하고 CTA는 /upgrade. Phase 3 검토 지점: 라이트/다크 · 880px 이하 · 빈 상태 · 잠긴 상태 육안 확인 필요",
+      "started_at": "2026-08-04T17:06:03+0900",
+      "completed_at": "2026-08-04T17:11:38+0900"
+    }
+  ],
+  "created_at": "2026-08-04T16:39:19+0900",
+  "completed_at": "2026-08-04T17:11:39+0900"
 }
