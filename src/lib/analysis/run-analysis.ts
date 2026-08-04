@@ -22,7 +22,10 @@ import {
   insertTransactionsForUser,
   updateUploadForUser,
 } from "@/lib/supabase/service";
-import { classifyMerchants } from "@/services/claude/classify-merchants";
+import {
+  ClassifyBatchError,
+  classifyMerchants,
+} from "@/services/claude/classify-merchants";
 import { ClaudeCallError, type ClaudeCallErrorKind } from "@/services/claude/client";
 import { mapColumns } from "@/services/claude/map-columns";
 import type { ColumnMap } from "@/types/csv";
@@ -57,6 +60,24 @@ function errorCode(error: unknown, stage: Stage, expired: boolean): ErrorCode {
 
 function llmKind(error: unknown): ClaudeCallErrorKind | undefined {
   return error instanceof ClaudeCallError ? error.kind : undefined;
+}
+
+/**
+ * 배치 검증 실패의 진단 정보. 개수와 위치만 담고 상호명·거래내역은 담지 않는다
+ * — 이 값들만으로 "몇 번째 배치에서 몇 개를 기대했는데 몇 개가 왔는지"가
+ * 드러나야 재현을 기다리지 않고 원인을 좁힐 수 있다.
+ */
+function classifyDiagnosis(error: unknown): Record<string, unknown> {
+  if (!(error instanceof ClassifyBatchError)) {
+    return {};
+  }
+  return {
+    stage: "classify",
+    batchNumber: error.batchNumber,
+    expectedCount: error.expectedCount,
+    actualCount: error.actualCount,
+    failureKind: error.failureKind,
+  };
 }
 
 async function readMapping(fingerprint: string): Promise<CachedMapping | null> {
@@ -192,6 +213,7 @@ export async function runAnalysis(
         code,
         rowCount,
         ...(llmKind(error) ? { llmKind: llmKind(error) } : {}),
+        ...classifyDiagnosis(error),
       }),
     );
     try {

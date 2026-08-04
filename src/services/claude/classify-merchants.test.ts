@@ -138,6 +138,104 @@ describe("classifyMerchants", () => {
     });
   });
 
+  // 진단용 분류. "schema" 하나로는 프롬프트를 고쳐야 하는지, 배치 크기를
+  // 줄여야 하는지, 응답 형태를 바꿔야 하는지 알 수 없다.
+  it("labels a length mismatch with the expected and actual counts", async () => {
+    clientMock.callStructured.mockResolvedValue([result(0)]);
+
+    await expect(classifyMerchants(["A", "B", "C"])).rejects.toMatchObject({
+      kind: "schema",
+      failureKind: "length_mismatch",
+      batchNumber: 1,
+      expectedCount: 3,
+      actualCount: 1,
+    });
+  });
+
+  it("labels a non-array response as a length mismatch with a null count", async () => {
+    clientMock.callStructured.mockResolvedValue({ items: [result(0)] });
+
+    await expect(classifyMerchants(["A"])).rejects.toMatchObject({
+      failureKind: "length_mismatch",
+      expectedCount: 1,
+      actualCount: null,
+    });
+  });
+
+  it("labels out-of-order indexes as an index mismatch", async () => {
+    clientMock.callStructured.mockResolvedValue([result(1), result(0)]);
+
+    await expect(classifyMerchants(["A", "B"])).rejects.toMatchObject({
+      failureKind: "index_mismatch",
+      expectedCount: 2,
+      actualCount: 2,
+    });
+  });
+
+  it("labels unparsable JSON reported by the client", async () => {
+    clientMock.callStructured.mockRejectedValue(
+      new ClaudeCallError("json_parse"),
+    );
+
+    await expect(classifyMerchants(["A", "B"])).rejects.toMatchObject({
+      failureKind: "json_parse_failed",
+      expectedCount: 2,
+      actualCount: null,
+    });
+  });
+
+  it("labels a schema violation reported by the client", async () => {
+    clientMock.callStructured.mockRejectedValue(new ClaudeCallError("schema"));
+
+    await expect(classifyMerchants(["A", "B"])).rejects.toMatchObject({
+      failureKind: "schema_validation_failed",
+      expectedCount: 2,
+      actualCount: null,
+    });
+  });
+
+  it("passes non-schema Claude failures through untouched", async () => {
+    const refusal = new ClaudeCallError("refusal");
+    clientMock.callStructured.mockRejectedValue(refusal);
+
+    await expect(classifyMerchants(["A"])).rejects.toBe(refusal);
+  });
+
+  it("reports which batch failed, not always the first", async () => {
+    const names = Array.from(
+      { length: CLASSIFY_BATCH_SIZE + 2 },
+      (_, index) => `M${index}`,
+    );
+    clientMock.callStructured.mockImplementation(
+      async ({ userData }: { userData: string }) => {
+        const batch = JSON.parse(userData) as string[];
+        if (batch.length === CLASSIFY_BATCH_SIZE) {
+          return batch.map((_, index) => result(index));
+        }
+        return [];
+      },
+    );
+
+    await expect(classifyMerchants(names)).rejects.toMatchObject({
+      failureKind: "length_mismatch",
+      batchNumber: 2,
+      expectedCount: 2,
+      actualCount: 0,
+    });
+  });
+
+  it("keeps merchant names out of the diagnostic error", async () => {
+    clientMock.callStructured.mockResolvedValue([]);
+    const canary = "가맹점명_CANARY_UNIQUE";
+
+    const error = await classifyMerchants([canary]).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(JSON.stringify(error)).not.toContain(canary);
+    expect((error as Error).message).not.toContain(canary);
+  });
+
   it("downgrades an unknown account code to uncertain", async () => {
     clientMock.callStructured.mockResolvedValue([
       result(0, { accountCode: "invented" }),
