@@ -67,26 +67,39 @@ check(edit(win("docs/DESIGN.md")), "ALLOW", "문서");
 check(edit(win("src/lib/csv/normalize.test.ts")), "ALLOW", "테스트 파일 자체");
 
 // --- 차단: 테스트가 먼저 있어야 하는 구현 코드 ---
-check(edit(win("src/lib/csv/normalize.ts")), "DENY", "순수 로직");
-check(edit(win("src/components/Report.tsx")), "DENY", "컴포넌트");
-check(edit(win("src/app/api/uploads/route.ts")), "DENY", "라우트 핸들러");
-check(edit(posix("src/services/claude/map.ts")), "DENY", "외부 SDK 래퍼");
+// 이 블록은 '테스트가 하나도 없는' 빈 임시 루트에서 돌린다.
+// 실제 레포 경로를 픽스처로 쓰면, 그 모듈이 나중에 정당하게 테스트를 갖는 순간
+// 가드는 올바르게 ALLOW 를 내는데 기대값만 낡아서 빨개진다. Phase 1~2 에서 실제로
+// 그렇게 됐다 (normalize.test.ts · route.test.ts · middleware.test.ts 가 생기면서 6건 실패).
+// 여기서 검증하려는 것은 '이 경로 모양이 면제 목록에 없다'이지 '레포에 테스트가 없다'가 아니다.
+const bare = fs.mkdtempSync(path.join(os.tmpdir(), "tdd-guard-bare-"));
+const bareWin = (rel) => `${bare.replace(/\//g, "\\")}\\${rel.replace(/\//g, "\\")}`;
+const barePosix = (rel) => `${bare.replace(/\\/g, "/")}/${rel}`;
+
+check(edit(bareWin("src/lib/csv/normalize.ts")), "DENY", "순수 로직", bare);
+check(edit(bareWin("src/components/Report.tsx")), "DENY", "컴포넌트", bare);
+check(edit(bareWin("src/app/api/uploads/route.ts")), "DENY", "라우트 핸들러", bare);
+check(edit(barePosix("src/services/claude/map.ts")), "DENY", "외부 SDK 래퍼", bare);
 // AGENTS.md: middleware.ts 는 면제가 아니다
-check(edit(win("src/middleware.ts")), "DENY", "middleware 는 면제 아님");
+check(edit(bareWin("src/middleware.ts")), "DENY", "middleware 는 면제 아님", bare);
 
 // --- Codex apply_patch: 프리폼 패치 원문에서 경로를 뽑아야 한다 ---
+// 패치 봉투의 경로는 상대경로라 훅의 cwd 기준으로 해석된다 → 같은 빈 루트에서 돌린다.
 const addPatch = "*** Begin Patch\n*** Add File: src/lib/csv/normalize.ts\n+export const x = 1;\n*** End Patch";
 const updatePagePatch = "*** Begin Patch\n*** Update File: src/app/page.tsx\n+// hi\n*** End Patch";
 
-check(addPatch, "DENY", "apply_patch 문자열 payload — 테스트 없는 새 구현 파일");
-check(updatePagePatch, "ALLOW", "apply_patch 문자열 payload — 면제 대상");
-check({ command: addPatch }, "DENY", "apply_patch 가 {command} 로 감싸져 와도 동일");
-check({ input: addPatch }, "DENY", "apply_patch 가 {input} 으로 감싸져 와도 동일");
+check(addPatch, "DENY", "apply_patch 문자열 payload — 테스트 없는 새 구현 파일", bare);
+check(updatePagePatch, "ALLOW", "apply_patch 문자열 payload — 면제 대상", bare);
+check({ command: addPatch }, "DENY", "apply_patch 가 {command} 로 감싸져 와도 동일", bare);
+check({ input: addPatch }, "DENY", "apply_patch 가 {input} 으로 감싸져 와도 동일", bare);
 check(
   { command: "*** Begin Patch\n*** Delete File: src/lib/csv/old.ts\n*** End Patch" },
   "ALLOW",
   "파일 삭제는 테스트를 요구하지 않는다",
+  bare,
 );
+
+fs.rmSync(bare, { recursive: true, force: true });
 
 // --- 테스트가 실제로 존재하면 통과해야 한다 ---
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdd-guard-"));
