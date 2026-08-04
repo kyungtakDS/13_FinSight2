@@ -23,11 +23,13 @@ function queryResult(data: unknown = null) {
     maybeSingle: vi.fn(),
     update: vi.fn(),
     insert: vi.fn(),
+    delete: vi.fn(),
   };
   chain.select.mockReturnValue(chain);
   chain.eq.mockReturnValue(chain);
   chain.update.mockReturnValue(chain);
   chain.insert.mockReturnValue(chain);
+  chain.delete.mockReturnValue(chain);
   chain.single.mockResolvedValue({ data, error: null });
   chain.maybeSingle.mockResolvedValue({ data, error: null });
   return chain;
@@ -64,7 +66,9 @@ describe("service-role Supabase access", () => {
       "getProfilePlan",
       "getUploadForUser",
       "updateUploadForUser",
+      "claimUploadRetry",
       "insertTransactionsForUser",
+      "deleteTransactionsForUser",
       "downloadOriginalForUser",
       "deleteOriginalForUser",
     ] as const;
@@ -133,6 +137,35 @@ describe("service-role Supabase access", () => {
     expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
   });
 
+  it("claims a retry with a compare-and-swap on status and retry_count", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [{ id: "upload-1" }], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRetry } = await import("./service");
+
+    await expect(claimUploadRetry("user-1", "upload-1", 1)).resolves.toBe(true);
+
+    expect(query.update).toHaveBeenCalledWith({
+      retry_count: 2,
+      status: "processing",
+      error_code: null,
+      finished_at: null,
+    });
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
+    expect(query.eq).toHaveBeenCalledWith("status", "failed");
+    expect(query.eq).toHaveBeenCalledWith("retry_count", 1);
+  });
+
+  it("reports a lost retry race when the guarded update matches no row", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRetry } = await import("./service");
+
+    await expect(claimUploadRetry("user-1", "upload-1", 0)).resolves.toBe(false);
+  });
+
   it("inserts transaction rows with user and upload ownership", async () => {
     const query = queryResult();
     query.insert.mockResolvedValue({ error: null });
@@ -162,6 +195,20 @@ describe("service-role Supabase access", () => {
         verdict: "expense",
       },
     ]);
+  });
+
+  it("deletes prior transaction rows within both user and upload scope", async () => {
+    const query = queryResult();
+    query.eq.mockReturnValueOnce(query).mockResolvedValueOnce({ error: null });
+    mocks.from.mockReturnValue(query);
+    const { deleteTransactionsForUser } = await import("./service");
+
+    await deleteTransactionsForUser("user-1", "upload-1");
+
+    expect(mocks.from).toHaveBeenCalledWith("transactions");
+    expect(query.delete).toHaveBeenCalledOnce();
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("upload_id", "upload-1");
   });
 
   it("rejects cross-user storage paths before touching storage", async () => {

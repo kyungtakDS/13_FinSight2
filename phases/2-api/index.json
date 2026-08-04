@@ -2,11 +2,55 @@
   "project": "FinSight2",
   "phase": "2-api",
   "steps": [
-    { "step": 0, "name": "gate", "status": "pending" },
-    { "step": 1, "name": "analysis-pipeline", "status": "pending" },
-    { "step": 2, "name": "uploads-ingest", "status": "pending" },
-    { "step": 3, "name": "uploads-detail", "status": "pending" },
-    { "step": 4, "name": "uploads-retry", "status": "pending" },
-    { "step": 5, "name": "uploads-export", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "gate",
+      "status": "completed",
+      "started_at": "2026-08-04T15:23:35+0900",
+      "summary": "lib/gate.ts — viewScope(plan)과 gateReport(plan, summary, txns). free는 transactions 길이 0 + lockedTxnCount + insights 앞 3개, summary 합계는 그대로. 알 수 없는 plan은 free. 순수 함수 — plan은 라우트가 DB에서 읽어 넘긴다",
+      "completed_at": "2026-08-04T15:27:23+0900"
+    },
+    {
+      "step": 1,
+      "name": "analysis-pipeline",
+      "status": "completed",
+      "started_at": "2026-08-04T15:27:23+0900",
+      "summary": "lib/analysis/run-analysis.ts — runAnalysis(userId, uploadId). Storage→decode/parse→fingerprint→format cache (LLM only on miss)→normalize→dictionary cache (LLM only for misses)→dictionary upsert→transaction replacement→aggregate→upload completion; never rejects, maps failures to fixed error codes, and logs metadata only.",
+      "completed_at": "2026-08-04T15:32:13+0900"
+    },
+    {
+      "step": 2,
+      "name": "uploads-ingest",
+      "status": "completed",
+      "started_at": "2026-08-04T15:32:14+0900",
+      "summary": "app/api/uploads/route.ts — POST(runtime nodejs, maxDuration 300): 인증→확장자/2MB→fileHash→중복 409(+existingUploadId, Storage 미사용)→Storage {userId}/{id}.csv→INSERT(실패 시 객체 보상 삭제)→202 {id}→after(runAnalysis). GET: 자기 업로드 100건, created_at desc, 거래행/전체인사이트 미포함",
+      "completed_at": "2026-08-04T15:38:29+0900"
+    },
+    {
+      "step": 3,
+      "name": "uploads-detail",
+      "status": "completed",
+      "started_at": "2026-08-04T15:38:29+0900",
+      "summary": "app/api/uploads/[id]/route.ts — GET은 부재·타인을 동일한 404로 처리하고 서버 plan에 따라 free 거래 조회를 생략하며, DELETE는 Storage→DB 순서와 cascade를 보장한다.",
+      "completed_at": "2026-08-04T15:41:57+0900"
+    },
+    {
+      "step": 4,
+      "name": "uploads-retry",
+      "status": "completed",
+      "started_at": "2026-08-04T15:41:57+0900",
+      "summary": "app/api/uploads/[id]/retry/route.ts — POST: user-scoped 404, expiry-first rejection, failed-state and retry-limit checks, atomic retry transition, 202 with retriesLeft, then after(runAnalysis); no advisory lock.",
+      "completed_at": "2026-08-04T15:45:14+0900"
+    },
+    {
+      "step": 5,
+      "name": "uploads-export",
+      "status": "completed",
+      "started_at": "2026-08-04T15:45:15+0900",
+      "summary": "app/api/uploads/[id]/export/route.ts — GET: 401→404→402(payment_required, 거래 조회·생성 전)→409(미완료)→CSV. UTF-8 BOM, CSV 인젝션 이스케이프, 한글 계정과목/판정 라벨, reason은 merchant_dictionary 조회·조인, 취소 음수 보존, uncertain 포함, 세무 고지 행, 파일명 서버 생성. Phase 2 검토 지점: ANTHROPIC_API_KEY로 LLM 호출 2곳 실측 필요 (mock과 실제 SDK 괴리 확인)",
+      "completed_at": "2026-08-04T15:49:32+0900"
+    }
+  ],
+  "created_at": "2026-08-04T15:23:35+0900",
+  "completed_at": "2026-08-04T15:49:32+0900"
 }

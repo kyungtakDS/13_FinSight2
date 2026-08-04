@@ -12,7 +12,8 @@
     },
     {
       "dir": "2-api",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-04T15:49:32+0900"
     },
     {
       "dir": "3-app-ui",
