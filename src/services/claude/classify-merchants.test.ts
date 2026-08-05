@@ -490,3 +490,110 @@ describe("classifyMerchants", () => {
     expect((error as Error).message).not.toContain(privateMerchant);
   });
 });
+
+/** 국민카드 재현용 — 고유 가맹점 131개는 배치를 여러 개로 쪼개는 첫 사례다. */
+function syntheticMerchants(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `가맹점 ${index + 1}호점`);
+}
+
+describe("classifyMerchants batching", () => {
+  beforeEach(() => {
+    clientMock.callStructured.mockReset();
+    clientMock.callStructured.mockImplementation(
+      async ({ userData }: { userData: string }) => {
+        const names = JSON.parse(userData) as string[];
+        return names.map((_, index) => result(index));
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // 100건 배치는 요청 하나가 지나치게 커진다. 작게 쪼개면 실패해도 잃는 범위가 좁고
+  // 재시도 비용도 낮다.
+  it("keeps the batch size small enough to survive one upstream rejection", () => {
+    expect(CLASSIFY_BATCH_SIZE).toBeGreaterThanOrEqual(30);
+    expect(CLASSIFY_BATCH_SIZE).toBeLessThanOrEqual(50);
+  });
+
+  it("splits 131 unique merchants into whole batches no larger than the limit", async () => {
+    const names = syntheticMerchants(131);
+
+    const verdicts = await classifyMerchants(names);
+
+    const sizes = clientMock.callStructured.mock.calls.map(
+      ([{ userData }]: [{ userData: string }]) =>
+        (JSON.parse(userData) as string[]).length,
+    );
+    expect(sizes).toHaveLength(Math.ceil(131 / CLASSIFY_BATCH_SIZE));
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(CLASSIFY_BATCH_SIZE);
+    expect(sizes.reduce((total, size) => total + size, 0)).toBe(131);
+    expect(verdicts).toHaveLength(131);
+  });
+
+  it("scales the token budget to the batch instead of asking for a fixed 12k", async () => {
+    await classifyMerchants(syntheticMerchants(131));
+
+    const budgets = clientMock.callStructured.mock.calls.map(
+      ([{ maxTokens }]: [{ maxTokens: number }]) => maxTokens,
+    );
+    expect(Math.max(...budgets)).toBeLessThan(12_000);
+    expect(Math.min(...budgets)).toBeGreaterThan(0);
+  });
+
+  it("reports each finished batch as it completes", async () => {
+    const seen: number[] = [];
+
+    await classifyMerchants(syntheticMerchants(131), {
+      onBatchComplete: ({ names, verdicts }) => {
+        expect(names).toHaveLength(verdicts.length);
+        seen.push(names.length);
+      },
+    });
+
+    expect(seen).toHaveLength(Math.ceil(131 / CLASSIFY_BATCH_SIZE));
+    expect(seen.reduce((total, size) => total + size, 0)).toBe(131);
+  });
+
+  // 마지막 배치가 죽었다고 앞 배치의 LLM 비용까지 버리면, 재시도는 매번 처음부터
+  // 다시 분류하고 같은 지점에서 다시 죽는다.
+  it("hands back the batches that succeeded before a later batch fails", async () => {
+    const names = syntheticMerchants(131);
+    let call = 0;
+    clientMock.callStructured.mockImplementation(
+      async ({ userData }: { userData: string }) => {
+        call += 1;
+        if (call === 3) {
+          throw new ClaudeCallError("upstream");
+        }
+        const batch = JSON.parse(userData) as string[];
+        return batch.map((_, index) => result(index));
+      },
+    );
+    const completed: string[] = [];
+
+    const error = await classifyMerchants(names, {
+      onBatchComplete: ({ names: batchNames }) => {
+        completed.push(...batchNames);
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ClaudeCallError);
+    expect(completed).toHaveLength(CLASSIFY_BATCH_SIZE * 2);
+    expect(completed).toEqual(names.slice(0, CLASSIFY_BATCH_SIZE * 2));
+  });
+
+  it("propagates a failure raised by the batch callback", async () => {
+    const failure = new Error("dictionary write failed");
+
+    const error = await classifyMerchants(syntheticMerchants(60), {
+      onBatchComplete: () => {
+        throw failure;
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBe(failure);
+  });
+});

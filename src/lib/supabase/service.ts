@@ -13,6 +13,7 @@ type UploadDatabaseRow = {
   file_hash: string;
   status: UploadRow["status"];
   error_code: UploadRow["errorCode"];
+  error_detail: UploadRow["errorDetail"];
   retry_count: number;
   period_start: string | null;
   period_end: string | null;
@@ -47,6 +48,7 @@ function toUploadRow(row: UploadDatabaseRow): UploadRow {
     fileHash: row.file_hash,
     status: row.status,
     errorCode: row.error_code,
+    errorDetail: row.error_detail ?? null,
     retryCount: row.retry_count,
     periodStart: row.period_start,
     periodEnd: row.period_end,
@@ -66,6 +68,7 @@ function toUploadPatch(patch: Partial<UploadRow>): Record<string, unknown> {
     ["fileHash", "file_hash"],
     ["status", "status"],
     ["errorCode", "error_code"],
+    ["errorDetail", "error_detail"],
     ["retryCount", "retry_count"],
     ["periodStart", "period_start"],
     ["periodEnd", "period_end"],
