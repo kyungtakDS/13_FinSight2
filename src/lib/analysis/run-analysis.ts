@@ -30,7 +30,7 @@ import { ClaudeCallError, type ClaudeCallErrorKind } from "@/services/claude/cli
 import { mapColumns } from "@/services/claude/map-columns";
 import type { ColumnMap } from "@/types/csv";
 import type { ErrorCode } from "@/types/errors";
-import type { ClassifiedTxn, NormalizedTxn } from "@/types/transaction";
+import type { ClassifiedTxn, NormalizedTxn, Verdict } from "@/types/transaction";
 
 type Stage =
   | "load"
@@ -110,18 +110,48 @@ async function saveMapping(
   if (error) throw error;
 }
 
+/**
+ * personalKeys 는 이번 분석에서만 유효한 personal 판정이다. merchant_dictionary 는
+ * 사용자 간 공유라 개인 지출 판정을 캐시하면 남의 분석에 번지므로 저장하지 않는다.
+ */
 function applyClassifications(
   txns: NormalizedTxn[],
   entries: Map<string, DictEntry>,
+  personalKeys: Set<string>,
 ): ClassifiedTxn[] {
   return txns.map((txn) => {
-    const entry = entries.get(merchantKey(txn.merchant));
+    const key = merchantKey(txn.merchant);
+    const entry = entries.get(key);
+
+    if (entry) {
+      return {
+        ...txn,
+        accountCode: entry.accountCode,
+        verdict: entry.defaultVerdict,
+      };
+    }
+
     return {
       ...txn,
-      accountCode: entry?.accountCode ?? null,
-      verdict: entry?.defaultVerdict ?? "uncertain",
+      accountCode: null,
+      verdict: personalKeys.has(key) ? "personal" : "uncertain",
     };
   });
+}
+
+/** 판정별 건수만 센다. 상호명·금액은 담지 않는다. */
+function verdictCounts(verdicts: readonly Verdict[]): Record<Verdict, number> {
+  const counts: Record<Verdict, number> = {
+    expense: 0,
+    personal: 0,
+    uncertain: 0,
+  };
+
+  for (const verdict of verdicts) {
+    counts[verdict] += 1;
+  }
+
+  return counts;
 }
 
 /** Runs one upload inside Next.js after(); all failures are persisted and swallowed. */
@@ -167,18 +197,26 @@ export async function runAnalysis(
     const keys = [...new Set(normalized.map((txn) => merchantKey(txn.merchant)))];
     const entries = await lookupMerchants(keys);
     const missingKeys = keys.filter((key) => !entries.has(key));
+    const personalKeys = new Set<string>();
+    let classifiedVerdicts: Verdict[] = [];
     if (missingKeys.length > 0) {
       const originalNameByKey = new Map(
         normalized.map((txn) => [merchantKey(txn.merchant), txn.merchant]),
       );
       const missingNames = missingKeys.map((key) => originalNameByKey.get(key)!);
       const verdicts = await classifyMerchants(missingNames);
+      classifiedVerdicts = verdicts.map(({ verdict }) => verdict);
       const definite = verdicts.flatMap((verdict, index) => {
+        const key = missingKeys[index]!;
+        if (verdict.verdict === "personal") {
+          personalKeys.add(key);
+          return [];
+        }
         if (verdict.verdict === "uncertain" || verdict.accountCode === null) {
           return [];
         }
         const entry: DictEntry = {
-          merchantKey: missingKeys[index]!,
+          merchantKey: key,
           accountCode: verdict.accountCode,
           defaultVerdict: verdict.verdict,
           reason: verdict.reason,
@@ -189,7 +227,17 @@ export async function runAnalysis(
       await upsertMerchants(definite);
     }
 
-    const classified = applyClassifications(normalized, entries);
+    const classified = applyClassifications(normalized, entries, personalKeys);
+    // 분류기 출력(고유 가맹점 단위)과 거래에 최종 적용된 판정(거래 단위)을 나란히
+    // 남긴다. 둘이 어긋나면 판정이 조용히 강등되고 있다는 뜻이다.
+    console.info(
+      JSON.stringify({
+        event: "classify_verdicts",
+        uploadId,
+        before: verdictCounts(classifiedVerdicts),
+        after: verdictCounts(classified.map(({ verdict }) => verdict)),
+      }),
+    );
     stage = "persist";
     await deleteTransactionsForUser(userId, uploadId);
     await insertTransactionsForUser(userId, uploadId, classified);

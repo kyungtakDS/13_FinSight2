@@ -151,6 +151,42 @@ describe("runAnalysis", () => {
     expect(mocks.update).toHaveBeenLastCalledWith("user-1", "upload-1", expect.objectContaining({ status: "completed" }));
   });
 
+  // personal 은 이번 분석 거래에만 반영하고 전역 딕셔너리에는 캐시하지 않는다.
+  // 딕셔너리는 사용자 간 공유라 한 사람의 개인 지출 판정이 남에게 번지면 안 된다.
+  it("applies a personal verdict to the analysed transactions", async () => {
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockResolvedValue([{ accountCode: null, verdict: "personal", reason: "개인 지출" }]);
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1");
+    expect(mocks.insertTxns).toHaveBeenCalledWith("user-1", "upload-1", [expect.objectContaining({ verdict: "personal", accountCode: null, rowIndex: 1 })]);
+  });
+
+  it("never caches a personal verdict in the shared merchant dictionary", async () => {
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockResolvedValue([{ accountCode: null, verdict: "personal", reason: "개인 지출" }]);
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1");
+    expect(mocks.upsert).toHaveBeenCalledWith([]);
+  });
+
+  it("logs verdict counts before and after normalization without PII", async () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockResolvedValue([{ accountCode: null, verdict: "personal", reason: "개인 지출" }]);
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "classify_verdicts",
+      uploadId: "upload-1",
+      before: { expense: 0, personal: 1, uncertain: 0 },
+      after: { expense: 0, personal: 1, uncertain: 0 },
+    });
+    expect(JSON.stringify(logged)).not.toMatch(/UNIQUE_SHOP|개인 지출|CARD-9999/u);
+    spy.mockRestore();
+  });
+
   it.each([
     [new Error("storage"), "parse_failed", "download"],
     [new RowLimitExceeded(), "too_large", "normalize"],

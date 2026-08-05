@@ -290,6 +290,94 @@ describe("classifyMerchants", () => {
     ]);
   });
 
+  // personal 은 계정과목을 갖지 않는다 — 18개 코드가 전부 사업용 경비 계정이라
+  // 개인 지출에 붙일 코드가 없다. accountCode: null 은 오류가 아니라 정상값이다.
+  it("keeps a personal verdict that carries a null account code", async () => {
+    clientMock.callStructured.mockResolvedValue([
+      result(0, {
+        accountCode: null,
+        verdict: "personal",
+        reason: "개인 미용 서비스",
+      }),
+    ]);
+
+    await expect(classifyMerchants(["A"])).resolves.toEqual([
+      { accountCode: null, verdict: "personal", reason: "개인 미용 서비스" },
+    ]);
+  });
+
+  it("forces accountCode to null for personal verdicts", async () => {
+    clientMock.callStructured.mockResolvedValue([
+      result(0, {
+        accountCode: "welfare",
+        verdict: "personal",
+        reason: "개인 지출",
+      }),
+    ]);
+
+    await expect(classifyMerchants(["A"])).resolves.toEqual([
+      { accountCode: null, verdict: "personal", reason: "개인 지출" },
+    ]);
+  });
+
+  it("requires a valid account code for expense but not for personal", async () => {
+    clientMock.callStructured.mockResolvedValue([
+      result(0, { accountCode: null, verdict: "expense" }),
+      result(1, { accountCode: null, verdict: "personal", reason: "개인 의류" }),
+    ]);
+
+    await expect(classifyMerchants(["A", "B"])).resolves.toEqual([
+      { accountCode: null, verdict: "uncertain", reason: null },
+      { accountCode: null, verdict: "personal", reason: "개인 의류" },
+    ]);
+  });
+
+  it("tells the model that a personal verdict uses a null account code", async () => {
+    await classifyMerchants(["상호"]);
+    const system = clientMock.callStructured.mock.calls[0]?.[0].system;
+
+    expect(system).toMatch(/personal이면 accountCode는 null/u);
+  });
+
+  it("lists concrete personal spending examples in the system prompt", async () => {
+    await classifyMerchants(["상호"]);
+    const system = clientMock.callStructured.mock.calls[0]?.[0].system;
+
+    for (const example of [
+      "개인 식료품",
+      "의류",
+      "미용",
+      "개인 의료",
+      "취미",
+      "여가",
+      "개인 구독",
+    ]) {
+      expect(system).toContain(example);
+    }
+  });
+
+  it("tells the model to prefer personal over uncertain when spending is clearly personal", async () => {
+    await classifyMerchants(["상호"]);
+    const system = clientMock.callStructured.mock.calls[0]?.[0].system;
+
+    expect(system).toMatch(/명백한 개인 지출[^\n]*uncertain[^\n]*personal/u);
+  });
+
+  it("shows an exact JSON output example covering all three verdicts", async () => {
+    await classifyMerchants(["상호"]);
+    const system: string = clientMock.callStructured.mock.calls[0]?.[0].system;
+    const [example] = /\[\{.*\}\]/u.exec(system) ?? [];
+
+    expect(example).toBeDefined();
+    const parsed = JSON.parse(example!) as Record<string, unknown>[];
+    expect(parsed.map((item) => item.verdict)).toEqual([
+      "expense",
+      "personal",
+      "uncertain",
+    ]);
+    expect(parsed[1]).toMatchObject({ verdict: "personal", accountCode: null });
+  });
+
   it("uses null for a missing or multiline reason", async () => {
     clientMock.callStructured.mockResolvedValue([
       result(0, { reason: undefined }),
