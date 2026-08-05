@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Button } from "./Button";
 
 export interface PricingCardProps {
@@ -11,12 +11,14 @@ export interface PricingCardProps {
   features: string[];
   ctaLabel: string;
   ctaVariant?: "primary" | "secondary";
+  /** 기본 버튼 대신 렌더할 CTA. 자체 동작·상태를 갖는 버튼을 끼워 넣을 때 쓴다. */
+  cta?: ReactNode;
   featured?: boolean;
   onCta?: () => void;
   style?: CSSProperties;
 }
 
-export function PricingCard({ name, price, period, blurb, features, ctaLabel, ctaVariant = "secondary", featured = false, onCta, style }: PricingCardProps) {
+export function PricingCard({ name, price, period, blurb, features, ctaLabel, ctaVariant = "secondary", cta, featured = false, onCta, style }: PricingCardProps) {
   return (
     <article
       className={featured ? "marketing-pricing-card--featured" : undefined}
@@ -28,7 +30,7 @@ export function PricingCard({ name, price, period, blurb, features, ctaLabel, ct
         {period ? <span className="t-caption">{period}</span> : null}
       </div>
       {blurb ? <p className="t-body-sm" style={{ margin: 0 }}>{blurb}</p> : null}
-      <Button variant={ctaVariant} fullWidth onClick={onCta}>{ctaLabel}</Button>
+      {cta ?? <Button variant={ctaVariant} fullWidth onClick={onCta}>{ctaLabel}</Button>}
       <ul className="t-body-sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-sm)", listStyle: "none", margin: 0, padding: 0 }}>
         {features.map((feature) => <li key={feature}>{feature}</li>)}
       </ul>
