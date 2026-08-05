@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ClaudeCallError } from "@/services/claude/client";
-import { ClassifyBatchError } from "@/services/claude/classify-merchants";
+import {
+  CLASSIFY_BATCH_SIZE,
+  ClassifyBatchError,
+} from "@/services/claude/classify-merchants";
 import { RowLimitExceeded } from "@/lib/csv/normalize";
 
 const mocks = vi.hoisted(() => ({
@@ -88,6 +91,30 @@ function mappingClient(hit: boolean) {
   mocks.serviceClient.mockReturnValue({ from: vi.fn(() => query) });
 }
 
+type Verdictish = { accountCode: string | null; verdict: string; reason: string | null };
+type BatchOptions = {
+  onBatchComplete?: (batch: {
+    names: string[];
+    verdicts: Verdictish[];
+  }) => Promise<void> | void;
+};
+
+/**
+ * 실제 classifyMerchants 처럼 배치 완료를 알린 뒤 판정을 돌려준다. 사전 저장은
+ * 그 콜백에서 일어나므로, 알리지 않는 mock 은 저장 경로를 아예 재현하지 못한다.
+ */
+function classifyingAs(...verdicts: Verdictish[]) {
+  return async (names: string[], options?: BatchOptions) => {
+    const produced = names.map((_, index) => verdicts[index] ?? verdicts[0]!);
+    await options?.onBatchComplete?.({ names, verdicts: produced });
+    return produced;
+  };
+}
+
+function dictionaryWrites(): Verdictish[] {
+  return (mocks.upsert.mock.calls as [Verdictish[]][]).flatMap(([entries]) => entries);
+}
+
 function dictionaryHit() {
   return new Map([["unique_shop", { merchantKey: "unique_shop", accountCode: "supplies", defaultVerdict: "expense", reason: "fixture" }]]);
 }
@@ -134,10 +161,10 @@ describe("runAnalysis", () => {
     const two = [...normalized, { ...normalized[0]!, rowIndex: 2, merchant: "MISSING_SHOP" }];
     mocks.normalizeRows.mockReturnValue({ txns: two, skipped: 0 });
     mocks.lookup.mockResolvedValue(dictionaryHit());
-    mocks.classify.mockResolvedValue([{ accountCode: "travel", verdict: "expense", reason: "fixture" }]);
+    mocks.classify.mockImplementation(classifyingAs({ accountCode: "travel", verdict: "expense", reason: "fixture" }));
     const { runAnalysis } = await import("./run-analysis");
     await runAnalysis("user-1", "upload-1");
-    expect(mocks.classify).toHaveBeenCalledWith(["MISSING_SHOP"]);
+    expect(mocks.classify).toHaveBeenCalledWith(["MISSING_SHOP"], expect.any(Object));
     expect(mocks.classify.mock.calls[0]![0]).not.toContain("UNIQUE_SHOP");
     expect(mocks.upsert).toHaveBeenCalledWith([{ merchantKey: "missing_shop", accountCode: "travel", defaultVerdict: "expense", reason: "fixture" }]);
   });
@@ -163,10 +190,10 @@ describe("runAnalysis", () => {
 
   it("never caches a personal verdict in the shared merchant dictionary", async () => {
     mocks.lookup.mockResolvedValue(new Map());
-    mocks.classify.mockResolvedValue([{ accountCode: null, verdict: "personal", reason: "개인 지출" }]);
+    mocks.classify.mockImplementation(classifyingAs({ accountCode: null, verdict: "personal", reason: "개인 지출" }));
     const { runAnalysis } = await import("./run-analysis");
     await runAnalysis("user-1", "upload-1");
-    expect(mocks.upsert).toHaveBeenCalledWith([]);
+    expect(dictionaryWrites()).toEqual([]);
   });
 
   it("logs verdict counts before and after normalization without PII", async () => {
@@ -278,5 +305,203 @@ describe("runAnalysis", () => {
     expect(logged).not.toHaveProperty("failureKind");
     expect(logged).not.toHaveProperty("batchNumber");
     spy.mockRestore();
+  });
+});
+
+describe("runAnalysis upstream diagnostics", () => {
+  const detail = {
+    status: 429,
+    errorType: "rate_limit_error",
+    requestId: "req_011CQ",
+    retryable: true,
+  } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUpload.mockResolvedValue(upload);
+    mocks.download.mockResolvedValue(new Uint8Array([1]));
+    mocks.detectEncoding.mockReturnValue("utf-8");
+    mocks.decodeCsv.mockReturnValue("CARD-9999,UNIQUE_CSV_CONTENT");
+    mocks.parseRows.mockReturnValue(rows);
+    mocks.fingerprint.mockReturnValue("fingerprint");
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0 });
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
+    mocks.aggregate.mockReturnValue(summary);
+    mocks.period.mockReturnValue({ start: "2026-01-02", end: "2026-01-02" });
+    mocks.update.mockResolvedValue(undefined);
+    mocks.removeTxns.mockResolvedValue(undefined);
+    mocks.insertTxns.mockResolvedValue(undefined);
+    mappingClient(true);
+  });
+
+  it("logs the upstream status, error type and request id", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockRejectedValue(new ClaudeCallError("upstream", detail));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "analysis_failed",
+      code: "upstream",
+      upstreamStatus: 429,
+      upstreamErrorType: "rate_limit_error",
+      upstreamRequestId: "req_011CQ",
+      upstreamRetryable: true,
+    });
+    spy.mockRestore();
+  });
+
+  it("persists the upstream detail on the upload without touching the fixed error code", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockRejectedValue(new ClaudeCallError("upstream", detail));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "upstream",
+        errorDetail: detail,
+      }),
+    );
+  });
+
+  it("clears a stale detail when the analysis succeeds", async () => {
+    mocks.classify.mockResolvedValue([
+      { accountCode: "supplies", verdict: "expense", reason: "fixture" },
+    ]);
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "completed", errorDetail: null }),
+    );
+  });
+
+  it("omits the upstream fields when the failure carries no detail", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockRejectedValue(new ClaudeCallError("upstream"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).not.toHaveProperty("upstreamStatus");
+    expect(logged).not.toHaveProperty("upstreamRequestId");
+    spy.mockRestore();
+  });
+
+  // 앞 배치의 분류 결과를 버리면 재시도가 매번 처음부터 다시 돌고 같은 곳에서 죽는다.
+  it("stores dictionary entries from batches that finished before the failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockImplementation(
+      async (
+        _names: string[],
+        options?: {
+          onBatchComplete?: (batch: {
+            names: string[];
+            verdicts: { accountCode: string | null; verdict: string; reason: string | null }[];
+          }) => Promise<void> | void;
+        },
+      ) => {
+        await options?.onBatchComplete?.({
+          names: ["UNIQUE_SHOP"],
+          verdicts: [{ accountCode: "supplies", verdict: "expense", reason: "완료된 배치" }],
+        });
+        throw new ClaudeCallError("upstream", detail);
+      },
+    );
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.upsert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        merchantKey: "unique_shop",
+        accountCode: "supplies",
+        defaultVerdict: "expense",
+      }),
+    ]);
+  });
+
+  // 국민카드 재현 — 고유 가맹점 131 개는 배치가 여러 개로 쪼개지는 첫 사례이고,
+  // 실제로 여기서 두 번 연속 upstream 으로 죽었다.
+  it("keeps the finished batches when a mid-run batch fails on 131 merchants", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const txns = Array.from({ length: 131 }, (_, index) => ({
+      rowIndex: index + 1,
+      txnDate: "2026-03-01",
+      merchant: `가맹점 ${index + 1}호점`,
+      amount: 1000,
+    }));
+    mocks.normalizeRows.mockReturnValue({ txns, skipped: 0 });
+    mocks.classify.mockImplementation(async (names: string[], options?: BatchOptions) => {
+      const batchSize = CLASSIFY_BATCH_SIZE;
+      for (let offset = 0; offset < names.length; offset += batchSize) {
+        const batch = names.slice(offset, offset + batchSize);
+        if (offset / batchSize === 2) {
+          throw new ClaudeCallError("upstream", detail);
+        }
+        await options?.onBatchComplete?.({
+          names: batch,
+          verdicts: batch.map(() => ({
+            accountCode: "supplies",
+            verdict: "expense",
+            reason: "합성 픽스처",
+          })),
+        });
+      }
+      throw new Error("unreachable");
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    // 앞 두 배치는 사전에 남아, 재시도가 캐시 적중으로 시작한다.
+    expect(dictionaryWrites()).toHaveLength(CLASSIFY_BATCH_SIZE * 2);
+    expect(mocks.insertTxns).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "failed", errorCode: "upstream", errorDetail: detail }),
+    );
+  });
+
+  // ADR-023 과 같은 이유로 personal 은 사용자 간 공유 사전에 남기지 않는다.
+  it("keeps personal verdicts out of the shared dictionary in the per-batch path", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockImplementation(
+      async (
+        _names: string[],
+        options?: {
+          onBatchComplete?: (batch: {
+            names: string[];
+            verdicts: { accountCode: string | null; verdict: string; reason: string | null }[];
+          }) => Promise<void> | void;
+        },
+      ) => {
+        await options?.onBatchComplete?.({
+          names: ["UNIQUE_SHOP"],
+          verdicts: [{ accountCode: null, verdict: "personal", reason: "개인 지출" }],
+        });
+        throw new ClaudeCallError("upstream", detail);
+      },
+    );
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    for (const [entries] of mocks.upsert.mock.calls as [unknown[]][]) {
+      expect(entries).toHaveLength(0);
+    }
   });
 });

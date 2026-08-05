@@ -18,10 +18,25 @@ export interface MerchantVerdict {
   reason: string | null;
 }
 
-export const CLASSIFY_BATCH_SIZE = 100;
+/**
+ * 100건 배치는 요청 하나가 너무 커서, 상류가 한 번 거절하면 그 100건이 통째로
+ * 날아가고 재시도 비용도 그대로 100건이다. 작게 쪼개면 잃는 범위와 재시도 단가가
+ * 함께 줄어든다.
+ */
+export const CLASSIFY_BATCH_SIZE = 40;
 
 const MAX_REASON_LENGTH = 500;
-const MAX_TOKENS_PER_BATCH = 12_000;
+
+/**
+ * 배치가 만들어 낼 JSON 분량에 맞춘 출력 예산. 고정 12k 를 요구하면 실제로 쓰지도
+ * 않을 출력 토큰을 배치마다 예약하게 된다.
+ */
+const TOKENS_PER_MERCHANT = 150;
+const MIN_BATCH_TOKENS = 1_500;
+
+function batchTokenBudget(size: number): number {
+  return Math.max(MIN_BATCH_TOKENS, size * TOKENS_PER_MERCHANT);
+}
 
 const RawVerdictSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -184,7 +199,7 @@ async function classifyBatch(
       system: SYSTEM_PROMPT,
       userData: JSON.stringify(names),
       schema: RawBatchSchema,
-      maxTokens: MAX_TOKENS_PER_BATCH,
+      maxTokens: batchTokenBudget(names.length),
     });
   } catch (error) {
     // 응답 형태 문제만 배치 컨텍스트를 붙여 다시 던진다. 거부·토큰 초과·
@@ -208,9 +223,23 @@ async function classifyBatch(
   return validated.map(normalizeVerdict);
 }
 
+export interface ClassifyBatchResult {
+  names: string[];
+  verdicts: MerchantVerdict[];
+}
+
+export interface ClassifyOptions {
+  /**
+   * 배치가 하나 끝날 때마다 호출된다. 뒤 배치가 실패해도 앞 배치의 분류 결과를
+   * 즉시 보존해, 재시도가 처음부터 다시 돌지 않게 하기 위한 훅이다.
+   */
+  onBatchComplete?: (batch: ClassifyBatchResult) => Promise<void> | void;
+}
+
 /** 입력 배열과 같은 길이·같은 순서의 배열을 반환한다. */
 export async function classifyMerchants(
   names: string[],
+  options: ClassifyOptions = {},
 ): Promise<MerchantVerdict[]> {
   if (names.length === 0) {
     return [];
@@ -241,7 +270,9 @@ export async function classifyMerchants(
   ) {
     const batch = uniqueNames.slice(offset, offset + CLASSIFY_BATCH_SIZE);
     const batchNumber = offset / CLASSIFY_BATCH_SIZE + 1;
-    uniqueVerdicts.push(...(await classifyBatch(batch, batchNumber)));
+    const batchVerdicts = await classifyBatch(batch, batchNumber);
+    uniqueVerdicts.push(...batchVerdicts);
+    await options.onBatchComplete?.({ names: batch, verdicts: batchVerdicts });
   }
 
   return inputUniqueIndexes.map((index) => uniqueVerdicts[index]);

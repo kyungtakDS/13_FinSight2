@@ -25,12 +25,14 @@ import {
 import {
   ClassifyBatchError,
   classifyMerchants,
+  type MerchantVerdict,
 } from "@/services/claude/classify-merchants";
 import { ClaudeCallError, type ClaudeCallErrorKind } from "@/services/claude/client";
 import { mapColumns } from "@/services/claude/map-columns";
 import type { ColumnMap } from "@/types/csv";
 import type { ErrorCode } from "@/types/errors";
 import type { ClassifiedTxn, NormalizedTxn, Verdict } from "@/types/transaction";
+import type { UploadErrorDetail } from "@/types/upload";
 
 type Stage =
   | "load"
@@ -60,6 +62,27 @@ function errorCode(error: unknown, stage: Stage, expired: boolean): ErrorCode {
 
 function llmKind(error: unknown): ClaudeCallErrorKind | undefined {
   return error instanceof ClaudeCallError ? error.kind : undefined;
+}
+
+function upstreamDetailOf(error: unknown): UploadErrorDetail | null {
+  return error instanceof ClaudeCallError ? error.detail : null;
+}
+
+/**
+ * 상류 실패의 진단 정보. errorCode 는 클라이언트로 나가는 고정 어휘라 429 인지
+ * 529 인지 400 인지 구분하지 못한다 — 그 구분이 여기 남아야 재현을 기다리지 않는다.
+ */
+function upstreamDiagnosis(error: unknown): Record<string, unknown> {
+  const detail = upstreamDetailOf(error);
+  if (!detail) {
+    return {};
+  }
+  return {
+    upstreamStatus: detail.status,
+    upstreamErrorType: detail.errorType,
+    upstreamRequestId: detail.requestId,
+    upstreamRetryable: detail.retryable,
+  };
 }
 
 /**
@@ -139,6 +162,29 @@ function applyClassifications(
   });
 }
 
+/**
+ * 사전에 캐시할 수 있는 판정만 엔트리로 바꾼다. personal 은 남기지 않는다 —
+ * merchant_dictionary 는 merchant_key 단독 PK 로 사용자 간 공유라, 한 사람의
+ * 개인 지출 판정이 남의 분석에 번지면 안 된다.
+ */
+function cacheableEntries(
+  names: string[],
+  verdicts: MerchantVerdict[],
+): DictEntry[] {
+  return verdicts.flatMap((verdict, index) => {
+    if (verdict.verdict !== "expense" || verdict.accountCode === null) {
+      return [];
+    }
+    const entry: DictEntry = {
+      merchantKey: merchantKey(names[index]!),
+      accountCode: verdict.accountCode,
+      defaultVerdict: verdict.verdict,
+      reason: verdict.reason,
+    };
+    return [entry];
+  });
+}
+
 /** 판정별 건수만 센다. 상호명·금액은 담지 않는다. */
 function verdictCounts(verdicts: readonly Verdict[]): Record<Verdict, number> {
   const counts: Record<Verdict, number> = {
@@ -204,27 +250,27 @@ export async function runAnalysis(
         normalized.map((txn) => [merchantKey(txn.merchant), txn.merchant]),
       );
       const missingNames = missingKeys.map((key) => originalNameByKey.get(key)!);
-      const verdicts = await classifyMerchants(missingNames);
-      classifiedVerdicts = verdicts.map(({ verdict }) => verdict);
-      const definite = verdicts.flatMap((verdict, index) => {
-        const key = missingKeys[index]!;
-        if (verdict.verdict === "personal") {
-          personalKeys.add(key);
-          return [];
-        }
-        if (verdict.verdict === "uncertain" || verdict.accountCode === null) {
-          return [];
-        }
-        const entry: DictEntry = {
-          merchantKey: key,
-          accountCode: verdict.accountCode,
-          defaultVerdict: verdict.verdict,
-          reason: verdict.reason,
-        };
-        entries.set(entry.merchantKey, entry);
-        return [entry];
+      // 배치가 끝날 때마다 곧바로 사전에 넣는다. 뒤 배치가 죽어도 앞 배치의 LLM
+      // 결과는 남아, 재시도가 캐시 적중으로 시작해 남은 만큼만 다시 분류한다.
+      // 최종 상태는 반환값으로 만든다 — 콜백이 불렸는지에 정확성이 걸리면 안 된다.
+      const verdicts = await classifyMerchants(missingNames, {
+        onBatchComplete: async ({ names: batchNames, verdicts: batchVerdicts }) => {
+          const definite = cacheableEntries(batchNames, batchVerdicts);
+          if (definite.length > 0) {
+            await upsertMerchants(definite);
+          }
+        },
       });
-      await upsertMerchants(definite);
+
+      classifiedVerdicts = verdicts.map(({ verdict }) => verdict);
+      verdicts.forEach((verdict, index) => {
+        if (verdict.verdict === "personal") {
+          personalKeys.add(missingKeys[index]!);
+        }
+      });
+      for (const entry of cacheableEntries(missingNames, verdicts)) {
+        entries.set(entry.merchantKey, entry);
+      }
     }
 
     const classified = applyClassifications(normalized, entries, personalKeys);
@@ -246,6 +292,7 @@ export async function runAnalysis(
     await updateUploadForUser(userId, uploadId, {
       status: "completed",
       errorCode: null,
+      errorDetail: null,
       summary,
       periodStart: period.start,
       periodEnd: period.end,
@@ -261,6 +308,7 @@ export async function runAnalysis(
         code,
         rowCount,
         ...(llmKind(error) ? { llmKind: llmKind(error) } : {}),
+        ...upstreamDiagnosis(error),
         ...classifyDiagnosis(error),
       }),
     );
@@ -268,6 +316,7 @@ export async function runAnalysis(
       await updateUploadForUser(userId, uploadId, {
         status: "failed",
         errorCode: code,
+        errorDetail: upstreamDetailOf(error),
         finishedAt: new Date().toISOString(),
       });
     } catch {

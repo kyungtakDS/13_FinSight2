@@ -18,7 +18,9 @@ vi.mock("@anthropic-ai/sdk", () => ({
 import {
   callStructured,
   ClaudeCallError,
+  CLAUDE_MAX_RETRIES,
   getAnthropic,
+  isRetryableStatus,
 } from "./client";
 
 const schema = z.object({ value: z.string() });
@@ -233,6 +235,126 @@ describe("Claude client", () => {
     });
 
     await expect(invoke()).rejects.toMatchObject({ kind: "upstream" });
+  });
+
+  // upstream 한 단어만 남기면 429 인지 529 인지 400 인지 알 수 없어 재현을
+  // 기다리는 것 말고는 할 수 있는 일이 없다.
+  it("keeps status, error type and request id from an SDK API error", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Rate limit reached for output tokens"), {
+        status: 429,
+        request_id: "req_011CQ",
+        error: { type: "error", error: { type: "rate_limit_error", message: "slow down" } },
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ClaudeCallError);
+    expect(error).toMatchObject({
+      kind: "upstream",
+      detail: {
+        status: 429,
+        errorType: "rate_limit_error",
+        requestId: "req_011CQ",
+        retryable: true,
+      },
+    });
+  });
+
+  it("reads the request id from the requestID alias", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("overloaded"), {
+        status: 529,
+        requestID: "req_alias",
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      detail: { status: 529, requestId: "req_alias", retryable: true },
+    });
+  });
+
+  it("marks a client error as non-retryable", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("bad request"), {
+        status: 400,
+        error: { type: "invalid_request_error" },
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      detail: { status: 400, errorType: "invalid_request_error", retryable: false },
+    });
+  });
+
+  it("still produces a detail when the failure carries no status", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      const failure = new Error("socket hang up");
+      failure.name = "APIConnectionError";
+      throw failure;
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      kind: "upstream",
+      detail: {
+        status: null,
+        errorType: "APIConnectionError",
+        requestId: null,
+        retryable: false,
+      },
+    });
+  });
+
+  // 상류 메시지에는 요청 내용이 되비쳐 나올 수 있다. 코드·유형·식별자만 남긴다.
+  it("never copies the upstream error message into the detail", async () => {
+    const userData = "private csv fragment";
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error(`rejected: ${userData}`), {
+        status: 400,
+        error: { type: "invalid_request_error", message: `rejected: ${userData}` },
+      });
+    });
+
+    const error = await invoke(userData).catch((caught: unknown) => caught);
+    const serialized = JSON.stringify((error as ClaudeCallError).detail);
+
+    expect(serialized).not.toContain(userData);
+    expect(serialized).not.toContain("rejected");
+  });
+
+  it("leaves detail null on failures that are not upstream", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(
+      message("end_turn", "not json"),
+    );
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "json_parse", detail: null });
+  });
+
+  it("configures the SDK to retry transient failures with backoff", () => {
+    getAnthropic();
+
+    expect(CLAUDE_MAX_RETRIES).toBeGreaterThan(0);
+    expect(anthropicMock.constructor).toHaveBeenCalledWith(
+      expect.objectContaining({ maxRetries: CLAUDE_MAX_RETRIES }),
+    );
+  });
+
+  it("classifies exactly the retryable upstream statuses", () => {
+    for (const status of [408, 409, 429, 500, 502, 503, 504, 529]) {
+      expect(isRetryableStatus(status)).toBe(true);
+    }
+    for (const status of [400, 401, 403, 404, 422, null]) {
+      expect(isRetryableStatus(status)).toBe(false);
+    }
   });
 
   it("never calls console methods", async () => {
