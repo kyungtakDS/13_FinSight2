@@ -11,10 +11,18 @@ export type UploadStatus = (typeof UPLOAD_STATUSES)[number];
 
 /**
  * 실패 원인의 진단 정보. `errorCode` 는 클라이언트로 나가는 고정 어휘라 원인을
- * 좁히지 못하므로 서버 쪽 기록을 따로 둔다. 상류 메시지·본문은 담지 않는다.
- * 이 값은 클라이언트로 내보내지 않는다.
+ * 좁히지 못하므로 서버 쪽 기록을 따로 둔다. 이 값은 클라이언트로 내보내지 않는다.
+ *
+ * 메시지·본문·힌트는 담지 않는다 — 상류 오류와 DB 오류 모두 요청 내용이나 행
+ * 값을 그대로 되비칠 수 있다. 남기는 것은 분류·코드·이름·식별자뿐이다.
+ *
+ * `source` 가 있어야 "Claude 장애"와 "우리 쪽 DB·코드 오류"를 구분할 수 있다.
+ * `errorCode` 는 둘 다 `upstream` 으로 뭉뚱그리기 때문이다.
  */
 export interface UploadErrorDetail {
+  source: "claude" | "database" | "internal";
+  stage: string;
+  errorName: string | null;
   status: number | null;
   errorType: string | null;
   requestId: string | null;

@@ -2,8 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Message } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { ZodType } from "zod";
 
-import type { UploadErrorDetail } from "@/types/upload";
-
 export type ClaudeCallErrorKind =
   | "refusal"
   | "max_tokens"
@@ -12,8 +10,13 @@ export type ClaudeCallErrorKind =
   | "schema"
   | "upstream";
 
-/** 상류 실패를 재현 없이 진단하기 위한 최소 정보. */
-export type UpstreamDetail = UploadErrorDetail;
+/** 상류 실패를 재현 없이 진단하기 위한 최소 정보. 메시지·본문은 담지 않는다. */
+export interface UpstreamDetail {
+  status: number | null;
+  errorType: string | null;
+  requestId: string | null;
+  retryable: boolean;
+}
 
 const ERROR_MESSAGES: Record<ClaudeCallErrorKind, string> = {
   refusal: "Claude refused the request.",

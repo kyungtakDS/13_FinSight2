@@ -27,7 +27,11 @@ import {
   classifyMerchants,
   type MerchantVerdict,
 } from "@/services/claude/classify-merchants";
-import { ClaudeCallError, type ClaudeCallErrorKind } from "@/services/claude/client";
+import {
+  ClaudeCallError,
+  type ClaudeCallErrorKind,
+  type UpstreamDetail,
+} from "@/services/claude/client";
 import { mapColumns } from "@/services/claude/map-columns";
 import type { ColumnMap } from "@/types/csv";
 import type { ErrorCode } from "@/types/errors";
@@ -64,7 +68,7 @@ function llmKind(error: unknown): ClaudeCallErrorKind | undefined {
   return error instanceof ClaudeCallError ? error.kind : undefined;
 }
 
-function upstreamDetailOf(error: unknown): UploadErrorDetail | null {
+function upstreamDetailOf(error: unknown): UpstreamDetail | null {
   return error instanceof ClaudeCallError ? error.detail : null;
 }
 
@@ -82,6 +86,50 @@ function upstreamDiagnosis(error: unknown): Record<string, unknown> {
     upstreamErrorType: detail.errorType,
     upstreamRequestId: detail.requestId,
     upstreamRetryable: detail.retryable,
+  };
+}
+
+function errorNameOf(error: unknown): string | null {
+  return error instanceof Error && error.name !== "" ? error.name : null;
+}
+
+/**
+ * PostgrestError 에서 code 만 가져온다. message·details·hint 에는 위반한 행의
+ * 값이 그대로 실려 오므로 담지 않는다.
+ */
+function databaseCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const { code } = error as { code?: unknown };
+  return typeof code === "string" && code !== "" ? code : null;
+}
+
+/**
+ * 실패의 출처를 가려 낸다. 진단을 ClaudeCallError 에만 달아 두면, 정작 Claude 와
+ * 무관한 실패(DB·코드 오류)에는 아무 단서도 남지 않는다 — errorCode 가 그것마저
+ * 'upstream' 이라 부르기 때문에 Claude 장애로 오독하게 된다.
+ */
+function errorDetailOf(error: unknown, stage: Stage): UploadErrorDetail {
+  const upstream = upstreamDetailOf(error);
+  if (upstream) {
+    return {
+      source: "claude",
+      stage,
+      errorName: errorNameOf(error),
+      ...upstream,
+    };
+  }
+
+  const code = databaseCode(error);
+  return {
+    source: code === null ? "internal" : "database",
+    stage,
+    errorName: errorNameOf(error),
+    status: null,
+    errorType: code,
+    requestId: null,
+    retryable: false,
   };
 }
 
@@ -301,12 +349,17 @@ export async function runAnalysis(
     });
   } catch (error) {
     const code = errorCode(error, stage, expired);
+    const detail = errorDetailOf(error, stage);
     console.error(
       JSON.stringify({
         event: "analysis_failed",
         uploadId,
         code,
         rowCount,
+        stage,
+        errorSource: detail.source,
+        errorName: detail.errorName,
+        errorType: detail.errorType,
         ...(llmKind(error) ? { llmKind: llmKind(error) } : {}),
         ...upstreamDiagnosis(error),
         ...classifyDiagnosis(error),
@@ -316,11 +369,21 @@ export async function runAnalysis(
       await updateUploadForUser(userId, uploadId, {
         status: "failed",
         errorCode: code,
-        errorDetail: upstreamDetailOf(error),
+        errorDetail: detail,
+        rowCount,
         finishedAt: new Date().toISOString(),
       });
-    } catch {
-      // No further recovery is possible, and after() must never reject.
+    } catch (recordError) {
+      // after() 는 절대 reject 하면 안 되지만, 조용히 삼키면 업로드가 processing
+      // 에 영원히 갇힌 채 이유가 남지 않는다.
+      console.error(
+        JSON.stringify({
+          event: "analysis_record_failed",
+          uploadId,
+          errorName: errorNameOf(recordError),
+          errorType: databaseCode(recordError),
+        }),
+      );
     }
   }
 }
