@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./StartFreeButton", () => ({
+  StartFreeButton: () => <button data-testid="start-free" type="button">무료로 시작하기</button>,
+}));
+
 import { Pricing } from "./Pricing";
 
 describe("Pricing", () => {
@@ -29,6 +34,15 @@ describe("Pricing", () => {
     expect(readFileSync(resolve("src/components/marketing/Pricing.tsx"), "utf8")).toContain(
       'window.location.assign("/upgrade")',
     );
+  });
+
+  it("drives the free tier CTA through the shared start action, not an anchor scroll", () => {
+    const source = readFileSync(resolve("src/components/marketing/Pricing.tsx"), "utf8");
+    render(<Pricing />);
+    expect(screen.getByTestId("start-free")).toBeInTheDocument();
+    // 예전에는 이 CTA 가 히어로로 스크롤만 하고 로그인을 시작하지 않았다.
+    expect(source).not.toContain("scrollIntoView");
+    expect(source).not.toContain("#start");
   });
 
   it("states Polar management and post-cancellation retention", () => {

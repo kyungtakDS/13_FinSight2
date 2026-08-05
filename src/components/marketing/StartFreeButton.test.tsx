@@ -1,17 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { signInWithOAuth, getSession, createClient } = vi.hoisted(() => ({
-  signInWithOAuth: vi.fn(),
-  getSession: vi.fn(),
+const { createClient, getSession, signInWithOAuth } = vi.hoisted(() => ({
   createClient: vi.fn(),
+  getSession: vi.fn(),
+  signInWithOAuth: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({ createClient }));
 
-import { GoogleSignInButton } from "./GoogleSignInButton";
+import { StartFreeButton } from "./StartFreeButton";
 
-describe("GoogleSignInButton", () => {
+describe("StartFreeButton", () => {
   let assign: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -28,10 +28,10 @@ describe("GoogleSignInButton", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts Google OAuth with the fixed callback URL", async () => {
-    render(<GoogleSignInButton />);
+  it("starts Google OAuth for a signed-out visitor", async () => {
+    render(<StartFreeButton />);
 
-    fireEvent.click(screen.getByRole("button", { name: /google/i }));
+    fireEvent.click(screen.getByRole("button", { name: "무료로 시작하기" }));
 
     await waitFor(() =>
       expect(signInWithOAuth).toHaveBeenCalledWith({
@@ -39,41 +39,39 @@ describe("GoogleSignInButton", () => {
         options: { redirectTo: "http://localhost:3000/auth/callback" },
       }),
     );
+    expect(assign).not.toHaveBeenCalled();
   });
 
-  it("sends an already signed-in user to the dashboard instead of re-authenticating", async () => {
+  it("sends a signed-in user to the dashboard", async () => {
     getSession.mockResolvedValue({ data: { session: { user: { id: "u1" } } } });
-    render(<GoogleSignInButton />);
+    render(<StartFreeButton />);
 
-    fireEvent.click(screen.getByRole("button", { name: /google/i }));
+    fireEvent.click(screen.getByRole("button", { name: "무료로 시작하기" }));
 
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/dashboard"));
     expect(signInWithOAuth).not.toHaveBeenCalled();
   });
 
-  it("has an accessible name and disables itself while starting OAuth", async () => {
-    let resolveSignIn!: (value: { error: null }) => void;
-    signInWithOAuth.mockReturnValue(new Promise((resolve) => { resolveSignIn = resolve; }));
-    render(<GoogleSignInButton />);
-    const button = screen.getByRole("button", { name: /google/i });
+  it("is a real button, never an in-page anchor", () => {
+    // 회귀 방지: 이 CTA 가 href 를 가지면 클릭이 로그인 대신 페이지 내 스크롤로 끝난다.
+    render(<StartFreeButton />);
 
-    fireEvent.click(button);
-
-    await waitFor(() => expect(button).toBeDisabled());
-    resolveSignIn({ error: null });
+    const cta = screen.getByRole("button", { name: "무료로 시작하기" });
+    expect(cta).not.toHaveAttribute("href");
+    expect(screen.queryByRole("link", { name: "무료로 시작하기" })).not.toBeInTheDocument();
   });
 
   it("explains the failure and stays clickable when OAuth fails", async () => {
     signInWithOAuth.mockResolvedValue({ error: { message: "invalid_client secret leaked" } });
-    render(<GoogleSignInButton />);
-    const button = screen.getByRole("button", { name: /google/i });
+    render(<StartFreeButton />);
+    const cta = screen.getByRole("button", { name: "무료로 시작하기" });
 
-    fireEvent.click(button);
+    fireEvent.click(cta);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("로그인을 시작하지 못했습니다");
     // 상류 예외 메시지를 사용자에게 그대로 노출하지 않는다.
     expect(alert).not.toHaveTextContent("invalid_client");
-    await waitFor(() => expect(button).not.toBeDisabled());
+    await waitFor(() => expect(cta).not.toBeDisabled());
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { PricingCard } from "./PricingCard";
+import { StartFreeButton } from "./StartFreeButton";
 
 // Polar 상품 설정이 청구 source of truth이므로 상품 가격 변경 시 이 상수도 맞춘다.
 const PRO_MONTHLY_PRICE = "₩9,900";
@@ -19,10 +20,10 @@ export function Pricing() {
       <div style={{ display: "grid", gap: "var(--space-lg)", gridTemplateColumns: "repeat(auto-fit, minmax(var(--space-section), 1fr))", margin: "0 auto" }}>
         <PricingCard
           blurb="먼저 자신의 카드 내역으로 핵심 결과를 확인합니다."
+          cta={<StartFreeButton fullWidth variant="secondary" />}
           ctaLabel="무료로 시작하기"
           features={["업로드·분석 무제한", "예상 절감액(참고용)", "상위 3개 인사이트"]}
           name="무료"
-          onCta={() => document.querySelector("#start")?.scrollIntoView()}
           period="계속 무료"
           price="₩0"
         />

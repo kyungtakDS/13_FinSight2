@@ -15,4 +15,10 @@ describe("PricingCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "시작" }));
     expect(onCta).toHaveBeenCalledOnce();
   });
+
+  it("renders a supplied cta element in place of the default button", () => {
+    render(<PricingCard name="무료" price="₩0" features={["무제한"]} ctaLabel="무료로 시작하기" cta={<button type="button">공용 시작 버튼</button>} />);
+    expect(screen.getByRole("button", { name: "공용 시작 버튼" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "무료로 시작하기" })).not.toBeInTheDocument();
+  });
 });

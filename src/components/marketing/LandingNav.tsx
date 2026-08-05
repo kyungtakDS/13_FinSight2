@@ -1,6 +1,6 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
-import { Button } from "./Button";
+import { StartFreeButton } from "./StartFreeButton";
 
 export function LandingNav() {
   return (
@@ -20,7 +20,7 @@ export function LandingNav() {
           <span style={{ width: "max-content" }}>
             <GoogleSignInButton />
           </span>
-          <Button href="#start">무료로 시작하기</Button>
+          <StartFreeButton />
         </div>
       </nav>
     </header>
