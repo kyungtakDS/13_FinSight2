@@ -43,7 +43,12 @@ const SYSTEM_PROMPT = `
 사용할 수 있는 계정과목은 아래 18개뿐이다. 코드와 라벨을 그대로 사용하고 목록 밖의 과목명이나 코드를 만들지 마라.
 ${accountList}
 
-판정은 expense(사업 경비 가능성이 높음), personal(개인 지출), uncertain(업종 또는 용도를 특정할 수 없음) 세 값뿐이다. 업종을 특정할 수 없으면 그럴듯하게 추측하지 말고 uncertain을 반환하라. uncertain이면 accountCode는 null이어야 한다. 세무 맥락에서는 자신감 있는 오분류가 명시적인 불확실성보다 위험하다.
+판정은 expense(사업 경비 가능성이 높음), personal(개인 지출), uncertain(업종 또는 용도를 특정할 수 없음) 세 값뿐이다. 업종을 특정할 수 없으면 그럴듯하게 추측하지 말고 uncertain을 반환하라. expense이면 accountCode에 위 목록의 코드를 반드시 채워라. personal이면 accountCode는 null이어야 한다 — 위 목록은 전부 사업용 경비 계정이라 개인 지출에 해당하는 코드가 없다. uncertain이면 accountCode는 null이어야 한다. 세무 맥락에서는 자신감 있는 오분류가 명시적인 불확실성보다 위험하다.
+
+개인 식료품·마트 장보기, 의류·잡화, 미용·이용, 개인 의료(병원·약국), 취미·여가·게임, 개인 구독 서비스처럼 사업과 무관한 것이 분명한 소비는 개인 지출이다. 명백한 개인 지출은 uncertain이 아니라 personal로 판정하라. uncertain은 업종 자체를 특정할 수 없을 때만 쓰고, 업종은 알지만 사업과 무관한 것이 분명하면 personal을 쓴다.
+
+각 결과는 아래 예시와 정확히 같은 네 개의 키를 가진 객체다. 예시는 형식 참고용이며 내용을 따라 하지 마라.
+[{"index":0,"accountCode":"travel","verdict":"expense","reason":"업무 이동 택시"},{"index":1,"accountCode":null,"verdict":"personal","reason":"개인 의류 구매"},{"index":2,"accountCode":null,"verdict":"uncertain","reason":"업종을 특정할 수 없음"}]
 
 reason은 판정 근거 한 줄만 반환하고 문단이나 줄바꿈을 쓰지 마라. 금액을 계산하거나 합계, 구성비, 절세 추정액을 만들지 마라. 입력에는 금액이 제공되지 않으며 산술은 서버가 수행한다.
 
@@ -104,21 +109,23 @@ function normalizeReason(value: unknown): string | null {
 function normalizeVerdict(raw: RawVerdict): MerchantVerdict {
   const reason = normalizeReason(raw.reason);
 
-  if (
-    (raw.verdict !== "expense" && raw.verdict !== "personal") ||
-    !isAccountCode(raw.accountCode)
-  ) {
-    return {
-      accountCode: null,
-      verdict: "uncertain",
-      reason: raw.verdict === "uncertain" ? reason : null,
-    };
+  // personal 은 계정과목을 갖지 않는다 — 18개 코드가 전부 사업용 경비 계정이라
+  // 개인 지출에 붙일 코드가 없다. accountCode 는 유효성 검사 대상이 아니라
+  // 항상 null 로 정규화한다. uncertain 과 같은 취급이다.
+  if (raw.verdict === "personal") {
+    return { accountCode: null, verdict: "personal", reason };
+  }
+
+  // 유효한 계정과목은 expense 에만 요구한다. 코드가 없거나 목록에 없는 코드를
+  // 지어냈다면 경비로 확정할 근거가 없으므로 uncertain 으로 강등한다.
+  if (raw.verdict === "expense" && isAccountCode(raw.accountCode)) {
+    return { accountCode: raw.accountCode, verdict: "expense", reason };
   }
 
   return {
-    accountCode: raw.accountCode,
-    verdict: raw.verdict,
-    reason,
+    accountCode: null,
+    verdict: "uncertain",
+    reason: raw.verdict === "uncertain" ? reason : null,
   };
 }
 
