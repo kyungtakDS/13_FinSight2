@@ -9,7 +9,9 @@ vi.mock("@/lib/supabase/service", () => ({
 }));
 
 import {
+  encodedFilterBytes,
   lookupMerchants,
+  LOOKUP_FILTER_BUDGET_BYTES,
   merchantKey,
   upsertMerchants,
 } from "./dictionary";
@@ -178,14 +180,21 @@ describe("lookupMerchants", () => {
     );
   });
 
-  it("splits 1,500 unique keys into batches of 500", async () => {
-    const db = mockClient({ rowsByBatch: [[], [], []] });
+  // 예전에는 500 개씩 잘랐다. 개수는 URL 길이를 말해 주지 않아서, 한글 키에서는
+  // 131 개만으로도 필터가 8,880 바이트가 되어 요청이 거절됐다.
+  it("splits 1,500 unique keys into budgeted batches", async () => {
+    const db = mockClient();
+    db.inMock.mockResolvedValue({ data: [], error: null });
     const keys = Array.from({ length: 1_500 }, (_, index) => `merchant-${index}`);
+
     await lookupMerchants(keys);
-    expect(db.inMock).toHaveBeenCalledTimes(3);
-    expect(db.inMock.mock.calls.map((call) => call[1].length)).toEqual([
-      500, 500, 500,
-    ]);
+
+    const batches = db.inMock.mock.calls.map((call) => call[1] as string[]);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      expect(encodedFilterBytes(batch)).toBeLessThanOrEqual(LOOKUP_FILTER_BUDGET_BYTES);
+    }
+    expect(batches.flat()).toHaveLength(1_500);
   });
 
   it("propagates database lookup errors", async () => {
@@ -380,5 +389,80 @@ describe("upsertMerchants", () => {
     ]);
     expect(spies.every((spy) => spy.mock.calls.length === 0)).toBe(true);
     spies.forEach((spy) => spy.mockRestore());
+  });
+});
+
+/**
+ * PostgREST 는 .in() 필터를 URL 쿼리스트링에 싣는다. 한글은 인코딩 시 문자당
+ * 9 바이트라, 개수로만 배치하면 게이트웨이 URI 한도를 넘겨 요청 자체가 거절된다.
+ * 실제로 국민카드(고유 가맹점 131 개, 인코딩 8,880 바이트)가 여기서 죽었다.
+ */
+describe("lookupMerchants request budget", () => {
+  function alwaysEmptyClient() {
+    const inMock = vi.fn().mockResolvedValue({ data: [], error: null });
+    const selectMock = vi.fn(() => ({ in: inMock }));
+    const fromMock = vi.fn(() => ({ select: selectMock }));
+    createServiceClientMock.mockReturnValue({ from: fromMock });
+    return inMock;
+  }
+
+  function batchesFrom(inMock: ReturnType<typeof vi.fn>): string[][] {
+    return inMock.mock.calls.map((call) => call[1] as string[]);
+  }
+
+  const koreanKeys = Array.from(
+    { length: 131 },
+    (_, index) => `가맹점 ${index + 1}호점 서울강남지점`,
+  );
+
+  it("keeps every request's encoded filter within the budget", async () => {
+    const inMock = alwaysEmptyClient();
+
+    await lookupMerchants(koreanKeys);
+
+    const batches = batchesFrom(inMock);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      expect(encodedFilterBytes(batch)).toBeLessThanOrEqual(LOOKUP_FILTER_BUDGET_BYTES);
+    }
+  });
+
+  it("covers every key exactly once across the requests", async () => {
+    const inMock = alwaysEmptyClient();
+
+    await lookupMerchants(koreanKeys);
+
+    const seen = batchesFrom(inMock).flat();
+    expect([...seen].sort()).toEqual([...new Set(koreanKeys.map(merchantKey))].sort());
+  });
+
+  it("still sends a single request when the keys are few", async () => {
+    const inMock = alwaysEmptyClient();
+
+    await lookupMerchants(["카페 하나", "서점 둘"]);
+
+    expect(batchesFrom(inMock)).toHaveLength(1);
+  });
+
+  it("never emits an empty request", async () => {
+    const inMock = alwaysEmptyClient();
+
+    await lookupMerchants(koreanKeys);
+
+    for (const batch of batchesFrom(inMock)) {
+      expect(batch.length).toBeGreaterThan(0);
+    }
+  });
+
+  // 한 키가 예산보다 길어도 요청은 나가야 한다 — 못 보내면 그 가맹점은 영원히 미분류다.
+  it("still sends a single oversized key on its own", async () => {
+    const inMock = alwaysEmptyClient();
+    const huge = "가".repeat(LOOKUP_FILTER_BUDGET_BYTES);
+
+    await lookupMerchants([huge, "카페 하나"]);
+
+    const batches = batchesFrom(inMock);
+    expect(batches.flat()).toContain(merchantKey(huge));
+    expect(batches.some((batch) => batch.length === 1)).toBe(true);
   });
 });

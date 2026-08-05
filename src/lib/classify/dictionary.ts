@@ -1,8 +1,48 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { isAccountCode, type AccountCode } from "@/types/account-codes";
 
-const LOOKUP_BATCH_SIZE = 500;
+/**
+ * PostgREST 는 .in() 필터를 URL 쿼리스트링에 싣는다. 한글 가맹점명은 퍼센트 인코딩
+ * 시 문자당 9 바이트로 불어나, 개수로만 배치하면 게이트웨이의 URI 한도(보통 8KB)를
+ * 넘겨 요청 자체가 거절된다. 실제로 고유 가맹점 131 개짜리 업로드에서 필터가
+ * 8,880 바이트가 되어 분석이 죽었다. 그래서 개수가 아니라 인코딩 길이로 쪼갠다.
+ */
+export const LOOKUP_FILTER_BUDGET_BYTES = 2_000;
+
 const MAX_REASON_LENGTH = 500;
+
+/** 키 하나가 in() 필터에서 차지하는 길이 — 값 + 따옴표 두 개 + 구분자 하나. */
+function keyCost(key: string): number {
+  return encodeURIComponent(key).length + 3;
+}
+
+/** 키 묶음이 URL 에서 차지할 필터 길이. */
+export function encodedFilterBytes(keys: string[]): number {
+  return keys.reduce((total, key) => total + keyCost(key), 0);
+}
+
+function budgetedBatches(keys: string[]): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
+
+  for (const key of keys) {
+    const cost = keyCost(key);
+    // 예산을 넘는 키 하나뿐이라면 그대로 보낸다 — 못 보내면 영원히 미분류로 남는다.
+    if (current.length > 0 && size + cost > LOOKUP_FILTER_BUDGET_BYTES) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(key);
+    size += cost;
+  }
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  return batches;
+}
 
 type DictionaryVerdict = "expense" | "personal";
 
@@ -37,12 +77,7 @@ export async function lookupMerchants(
   }
 
   const client = createServiceClient();
-  for (
-    let offset = 0;
-    offset < normalizedKeys.length;
-    offset += LOOKUP_BATCH_SIZE
-  ) {
-    const batch = normalizedKeys.slice(offset, offset + LOOKUP_BATCH_SIZE);
+  for (const batch of budgetedBatches(normalizedKeys)) {
     const { data, error } = await client
       .from("merchant_dictionary")
       .select("merchant_key, account_code, default_verdict, reason")

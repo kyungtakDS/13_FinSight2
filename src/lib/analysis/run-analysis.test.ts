@@ -316,6 +316,14 @@ describe("runAnalysis upstream diagnostics", () => {
     retryable: true,
   } as const;
 
+  /** 저장되는 형태 — 출처와 단계가 붙는다. */
+  const storedDetail = {
+    source: "claude",
+    stage: "classify",
+    errorName: "ClaudeCallError",
+    ...detail,
+  } as const;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getUpload.mockResolvedValue(upload);
@@ -367,7 +375,7 @@ describe("runAnalysis upstream diagnostics", () => {
       expect.objectContaining({
         status: "failed",
         errorCode: "upstream",
-        errorDetail: detail,
+        errorDetail: storedDetail,
       }),
     );
   });
@@ -472,8 +480,146 @@ describe("runAnalysis upstream diagnostics", () => {
     expect(mocks.update).toHaveBeenCalledWith(
       "user-1",
       "upload-1",
-      expect.objectContaining({ status: "failed", errorCode: "upstream", errorDetail: detail }),
+      expect.objectContaining({ status: "failed", errorCode: "upstream", errorDetail: storedDetail }),
     );
+  });
+
+  // 국민카드 실패의 진짜 원인은 Claude 가 아니라 classify 단계의 DB 조회였는데,
+  // 진단 정보를 ClaudeCallError 에만 달아 둬서 error_detail 이 null 로 남았다.
+  it("diagnoses a database failure instead of leaving the detail null", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const dbFailure = Object.assign(new Error("column merchant_key does not exist"), {
+      name: "PostgrestError",
+      code: "42703",
+    });
+    mocks.lookup.mockRejectedValue(dbFailure);
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "upstream",
+        errorDetail: expect.objectContaining({
+          source: "database",
+          stage: "classify",
+          errorName: "PostgrestError",
+          errorType: "42703",
+        }),
+      }),
+    );
+  });
+
+  it("labels a Claude failure as such and keeps its upstream fields", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.classify.mockRejectedValue(new ClaudeCallError("upstream", detail));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        errorDetail: expect.objectContaining({
+          source: "claude",
+          stage: "classify",
+          status: 429,
+          errorType: "rate_limit_error",
+        }),
+      }),
+    );
+  });
+
+  it("falls back to an internal diagnosis for a plain programming error", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockRejectedValue(new TypeError("x is not a function"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        errorDetail: expect.objectContaining({
+          source: "internal",
+          stage: "classify",
+          errorName: "TypeError",
+        }),
+      }),
+    );
+  });
+
+  // 상류·DB 메시지에는 행 내용이 섞여 나올 수 있다. 코드와 이름만 남긴다.
+  it("never stores the error message in the detail", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const secret = "merchant 강남스타카페 row 42";
+    mocks.lookup.mockRejectedValue(
+      Object.assign(new Error(secret), { name: "PostgrestError", code: "23505" }),
+    );
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const written = mocks.update.mock.calls.at(-1)?.[2] as { errorDetail: unknown };
+    expect(JSON.stringify(written.errorDetail)).not.toContain("강남스타카페");
+    expect(JSON.stringify(written.errorDetail)).not.toContain(secret);
+  });
+
+  it("logs the error name and stage so a non-Claude failure is identifiable", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockRejectedValue(
+      Object.assign(new Error("boom"), { name: "PostgrestError", code: "57014" }),
+    );
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "analysis_failed",
+      code: "upstream",
+      errorSource: "database",
+      errorName: "PostgrestError",
+      errorType: "57014",
+      stage: "classify",
+    });
+    spy.mockRestore();
+  });
+
+  // 실패한 업로드에도 "몇 행까지 갔는지"가 남아야 원인 범위를 좁힐 수 있다.
+  it("records how many rows were normalized even when the run fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockRejectedValue(new Error("db down"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "failed", rowCount: normalized.length }),
+    );
+  });
+
+  // 실패 기록마저 실패하면 업로드가 processing 에 영원히 갇힌다. 조용히 삼키지 않는다.
+  it("reports when persisting the failure itself fails", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockRejectedValue(new Error("db down"));
+    mocks.update.mockRejectedValue(new Error("update rejected"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await expect(runAnalysis("user-1", "upload-1")).resolves.toBeUndefined();
+
+    const events = spy.mock.calls.map(
+      (call) => (JSON.parse(String(call[0])) as { event: string }).event,
+    );
+    expect(events).toContain("analysis_record_failed");
+    spy.mockRestore();
   });
 
   // ADR-023 과 같은 이유로 personal 은 사용자 간 공유 사전에 남기지 않는다.
