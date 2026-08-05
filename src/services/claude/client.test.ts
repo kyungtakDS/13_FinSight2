@@ -131,6 +131,19 @@ describe("Claude client", () => {
     await expect(invoke()).rejects.toMatchObject({ kind: "schema" });
   });
 
+  // "JSON 이 아예 아니다" 와 "JSON 은 맞는데 형태가 다르다" 는 고치는 곳이 다르다.
+  // 하나로 뭉치면 프롬프트 문제인지 스키마 문제인지 구분할 수 없다.
+  it("separates unparsable JSON from a schema mismatch", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(
+      message("end_turn", "결과입니다: [{ ... }]"),
+    );
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ClaudeCallError);
+    expect(error).toMatchObject({ kind: "json_parse" });
+  });
+
   it("returns the parsed structured object", async () => {
     anthropicMock.finalMessage.mockResolvedValue(
       message("end_turn", '{"value":"ok"}'),

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ClaudeCallError } from "@/services/claude/client";
+import { ClassifyBatchError } from "@/services/claude/classify-merchants";
 import { RowLimitExceeded } from "@/lib/csv/normalize";
 
 const mocks = vi.hoisted(() => ({
@@ -54,7 +55,9 @@ vi.mock("@/lib/classify/dictionary", () => ({
   upsertMerchants: mocks.upsert,
   merchantKey: mocks.key,
 }));
-vi.mock("@/services/claude/classify-merchants", () => ({
+// ClassifyBatchError 는 instanceof 로 판별되므로 원본 클래스를 그대로 남긴다.
+vi.mock("@/services/claude/classify-merchants", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/claude/classify-merchants")>()),
   classifyMerchants: mocks.classify,
 }));
 vi.mock("@/lib/report/aggregate", () => ({
@@ -198,5 +201,46 @@ describe("runAnalysis", () => {
     expect(logged).not.toMatch(/UNIQUE_SHOP|UNIQUE_CSV_CONTENT|CARD-9999|secret\.csv|1000|Claude refused/u);
     expect(logged).toContain("analysis_failed"); expect(logged).toContain("refusal"); expect(logged).toContain("rowCount");
     spies.forEach((spy) => spy.mockRestore());
+  });
+
+  // 실패 로그만 보고 "몇 번째 배치에서 몇 개를 기대했는데 몇 개가 왔는지"를
+  // 알 수 있어야 한다. 이게 없으면 재현을 기다리는 것 말고 할 수 있는 게 없다.
+  it("logs the classify batch diagnosis when a batch fails validation", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockRejectedValue(
+      new ClassifyBatchError({
+        failureKind: "length_mismatch",
+        batchNumber: 2,
+        expectedCount: 47,
+        actualCount: 46,
+      }),
+    );
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      uploadId: "upload-1",
+      stage: "classify",
+      batchNumber: 2,
+      expectedCount: 47,
+      actualCount: 46,
+      failureKind: "length_mismatch",
+    });
+    spy.mockRestore();
+  });
+
+  it("omits the classify diagnosis for failures that are not batch validation", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockRejectedValue(new ClaudeCallError("refusal"));
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).not.toHaveProperty("failureKind");
+    expect(logged).not.toHaveProperty("batchNumber");
+    spy.mockRestore();
   });
 });

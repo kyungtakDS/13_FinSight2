@@ -6,6 +6,7 @@ export type ClaudeCallErrorKind =
   | "refusal"
   | "max_tokens"
   | "context_exceeded"
+  | "json_parse"
   | "schema"
   | "upstream";
 
@@ -13,6 +14,7 @@ const ERROR_MESSAGES: Record<ClaudeCallErrorKind, string> = {
   refusal: "Claude refused the request.",
   max_tokens: "Claude reached the output token limit.",
   context_exceeded: "Claude exceeded the context window.",
+  json_parse: "Claude returned text that is not JSON.",
   schema: "Claude returned an invalid structured response.",
   upstream: "Claude request failed.",
 };
@@ -81,18 +83,24 @@ export async function callStructured<T>(opts: {
       throw new ClaudeCallError("context_exceeded");
   }
 
+  const textBlock = message.content.find((block) => block.type === "text");
+
+  if (!textBlock) {
+    throw new ClaudeCallError("schema");
+  }
+
+  // JSON 이 아예 아닌 것과 JSON 은 맞는데 형태가 다른 것을 나눈다.
+  // 전자는 프롬프트·출력 형식 문제고, 후자는 스키마 문제라 고치는 곳이 다르다.
+  let payload: unknown;
   try {
-    const textBlock = message.content.find((block) => block.type === "text");
+    payload = JSON.parse(textBlock.text);
+  } catch {
+    throw new ClaudeCallError("json_parse");
+  }
 
-    if (!textBlock) {
-      throw new ClaudeCallError("schema");
-    }
-
-    return opts.schema.parse(JSON.parse(textBlock.text));
-  } catch (error) {
-    if (error instanceof ClaudeCallError) {
-      throw error;
-    }
+  try {
+    return opts.schema.parse(payload);
+  } catch {
     throw new ClaudeCallError("schema");
   }
 }
