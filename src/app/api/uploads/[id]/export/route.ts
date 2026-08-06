@@ -28,7 +28,10 @@ const DISCLAIMER =
 const BOM = "\ufeff";
 
 function csvCell(value: string | number): string {
-  let cell = String(value);
+  // 서버가 만든 숫자는 수식이 될 수 없다. 여기서 걸러내지 않으면 취소 거래의 음수
+  // 금액이 '-149900 처럼 텍스트가 되어 세무사 파일에서 금액 열의 합계가 잡히지 않는다.
+  if (typeof value === "number") return String(value);
+  let cell = value;
   // CSV injection defense: Excel must not execute user-originated cells as formulas.
   if (/^[=+\-@\t\r]/.test(cell)) cell = `'${cell}`;
   return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
