@@ -34,12 +34,24 @@ function createInsights(
   uncertainTotal: number,
   excludedCount: number,
   statusUnresolved: boolean,
+  skippedCount: number,
 ): Insight[] {
   if (txns.length === 0) {
     return [];
   }
 
   const insights: Insight[] = [];
+
+  // 명세서 건수와 리포트 건수가 어긋나는 두 번째 이유다. 첫째는 voided 이고
+  // 이건 아예 읽지 못한 행이라, 밝히지 않으면 사용자는 차이를 설명할 수 없다.
+  if (skippedCount > 0) {
+    const inputRows = txns.length + excludedCount + skippedCount;
+    insights.push({
+      id: "skipped-rows",
+      title: `해석하지 못한 행 ${skippedCount.toLocaleString("ko-KR")}건`,
+      body: `명세서 ${inputRows.toLocaleString("ko-KR")}행 중 ${txns.length.toLocaleString("ko-KR")}건을 거래로 읽었고, ${skippedCount.toLocaleString("ko-KR")}건은 날짜·가맹점·금액을 해석하지 못해 제외했습니다.`,
+    });
+  }
 
   // 취소 판정에 실패하면 취소 건이 정상 거래로 합계에 들어간다. 세무 자료에서
   // 과대계상은 누락보다 위험하므로 조용히 넘어가지 않는다 (ADR-014).
@@ -115,6 +127,7 @@ export function aggregate(
   txns: ClassifiedTxn[],
   excludedCount = 0,
   statusUnresolved = false,
+  skippedCount = 0,
 ): UploadSummary {
   let expenseTotal = 0;
   let personalTotal = 0;
@@ -184,6 +197,7 @@ export function aggregate(
       uncertainTotal,
       excludedCount,
       statusUnresolved,
+      skippedCount,
     ),
     txnCount: txns.length,
   };

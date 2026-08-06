@@ -182,6 +182,40 @@ describe("aggregate", () => {
     expect(`${warning.title} ${warning.body}`).not.toMatch(/merchant-|전표매입|승인취소|100/u);
   });
 
+  // 명세서 건수와 리포트 건수가 어긋나는 두 번째 이유다. 첫째는 voided,
+  // 둘째가 이것 — 어느 쪽도 안 밝히면 사용자는 숫자가 왜 다른지 알 수 없다.
+  it("reports rows that could not be read at all", () => {
+    const skipped = aggregate([txn(1, 100), txn(2, 200)], 0, false, 3).insights.find(
+      ({ id }) => id === "skipped-rows",
+    );
+    expect(skipped).toBeDefined();
+    expect(`${skipped!.title} ${skipped!.body}`).toContain("3");
+  });
+
+  it("counts every input row in the skipped insight", () => {
+    const skipped = aggregate([txn(1, 100), txn(2, 200)], 1, false, 3).insights.find(
+      ({ id }) => id === "skipped-rows",
+    )!;
+    // 2 정상 + 1 제외 + 3 해석 실패 = 6 입력
+    expect(`${skipped.title} ${skipped.body}`).toContain("6");
+  });
+
+  it("omits the skipped insight when every row was read", () => {
+    expect(
+      aggregate([txn(1, 100)], 0, false, 0).insights.some(({ id }) => id === "skipped-rows"),
+    ).toBe(false);
+    expect(
+      aggregate([txn(1, 100)]).insights.some(({ id }) => id === "skipped-rows"),
+    ).toBe(false);
+  });
+
+  it("puts only counts in the skipped insight", () => {
+    const skipped = aggregate([txn(1, 100)], 0, false, 2).insights.find(
+      ({ id }) => id === "skipped-rows",
+    )!;
+    expect(`${skipped.title} ${skipped.body}`).not.toMatch(/merchant-|2026-|100원/u);
+  });
+
   it("returns no insights for no data", () => {
     expect(aggregate([]).insights).toEqual([]);
   });

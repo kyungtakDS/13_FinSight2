@@ -12,6 +12,8 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 export const ERROR_MESSAGES = {
   parse_failed: "CSV 파일을 읽지 못했습니다. 파일 형식을 확인해 주세요.",
+  rows_unreadable:
+    "거래 날짜 또는 필수 거래 정보를 해석하지 못했습니다. 명세서를 원본 형식 그대로 내려받아 다시 올려 주세요.",
   too_large: "파일은 최대 2MB까지 올릴 수 있습니다.",
   duplicate_file: "이미 분석한 파일입니다",
   analysis_failed: "분석을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.",

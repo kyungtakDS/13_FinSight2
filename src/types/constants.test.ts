@@ -10,11 +10,12 @@ import {
 } from "@/types";
 
 describe("shared fixed vocabularies", () => {
-  it("defines exactly the seven public error codes", () => {
-    expect(ERROR_CODES).toHaveLength(7);
+  it("defines exactly the eight public error codes", () => {
+    expect(ERROR_CODES).toHaveLength(8);
     expect(new Set(ERROR_CODES)).toEqual(
       new Set([
         "parse_failed",
+        "rows_unreadable",
         "too_large",
         "duplicate_file",
         "analysis_failed",
@@ -23,6 +24,12 @@ describe("shared fixed vocabularies", () => {
         "payment_required",
       ]),
     );
+  });
+
+  // 파일을 못 읽은 것과 파일은 읽었는데 행을 못 읽은 것은 사용자가 할 일이 다르다.
+  it("separates an unreadable file from unreadable rows", () => {
+    expect(isErrorCode("rows_unreadable")).toBe(true);
+    expect(isErrorCode("parse_failed")).toBe(true);
   });
 
   it("defines the three verdicts in their canonical order", () => {

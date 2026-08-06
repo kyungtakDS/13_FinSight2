@@ -23,6 +23,17 @@ export class RowLimitExceeded extends Error {
   }
 }
 
+/**
+ * 데이터 행은 있는데 거래로 읽어낸 행이 하나도 없는 상태. 파일을 못 읽은 것과는
+ * 다르다 — 파일은 읽혔고 날짜·가맹점·금액 해석에서 전부 떨어진 것이다.
+ */
+export class RowsUnreadable extends Error {
+  constructor() {
+    super("rows_unreadable");
+    this.name = "RowsUnreadable";
+  }
+}
+
 export function detectEncoding(bytes: Uint8Array): CsvEncoding {
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -82,18 +93,35 @@ export function parseAmount(raw: string): number | null {
   return Number.isSafeInteger(integer) ? integer : null;
 }
 
+/**
+ * 카드사마다 날짜 표기가 다르다. 구분자가 있는 형태는 `년/월/일` 까지 받고 한
+ * 자리 월·일도 허용한다. 구분자가 없는 형태는 여덟 자리만 날짜로 본다 — 여기서
+ * 한 자리를 허용하면 `202612` 같은 여섯 자리 숫자가 날짜로 둔갑해, 금액이나
+ * 번호 컬럼이 날짜 컬럼으로 뽑혀도 걸러지지 않는다.
+ *
+ * 날짜 뒤에 시간이 붙는 형태는 공백으로 끊기면 지원한다 (기존 계약 그대로).
+ */
+const DATE_PATTERNS = [
+  /^(\d{4})\s*[년./-]\s*(\d{1,2})\s*[월./-]\s*(\d{1,2})일?(?=\s|$)/u,
+  /^(\d{4})(\d{2})(\d{2})(?=\s|$)/u,
+];
+
 export function parseTxnDate(raw: string): string | null {
-  const match = raw
-    .trim()
-    .match(/^(\d{4})(?:[./-]?)(\d{2})(?:[./-]?)(\d{2})(?:\s|$)/u);
+  const text = raw.trim();
+  let match: RegExpMatchArray | null = null;
+  for (const pattern of DATE_PATTERNS) {
+    match = text.match(pattern);
+    if (match) {
+      break;
+    }
+  }
   if (!match) {
     return null;
   }
 
-  const [, yearText, monthText, dayText] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
   const candidate = new Date(Date.UTC(year, month - 1, day));
 
   if (
@@ -104,7 +132,9 @@ export function parseTxnDate(raw: string): string | null {
     return null;
   }
 
-  return `${yearText}-${monthText}-${dayText}`;
+  // 한 자리 월·일을 받으므로 출력에서 0 을 채운다. 그러지 않으면 `2026-6-5` 가
+  // 저장되어 문자열 비교로 기간을 구하는 곳이 전부 어긋난다.
+  return `${match[1]}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export function normalizeMerchant(raw: string): string {

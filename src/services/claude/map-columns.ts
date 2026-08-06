@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 
 import { FINGERPRINT_ROWS } from "@/lib/csv/fingerprint";
+import { parseAmount } from "@/lib/csv/normalize";
 import type { ColumnMap } from "@/types/csv";
 import { callStructured, ClaudeCallError } from "./client";
 
@@ -26,7 +27,7 @@ const SYSTEM_PROMPT = `
 
 컬럼명은 카드사와 내보내기 형식에 따라 달라진다. 날짜 역할은 이용일자, 거래일자, 승인일자처럼 표현될 수 있고, 가맹점 역할은 가맹점명, 이용가맹점, 가맹점처럼 표현될 수 있으며, 금액 역할은 이용금액, 승인금액, 거래금액처럼 표현될 수 있다. 이 예시는 가능한 표현을 모두 열거한 규칙이 아니다. 단어 하나를 기계적으로 맞추지 말고, 주변 헤더와 뒤따르는 데이터 행의 형태를 함께 살펴 각 컬럼의 의미를 판정하라. 코드가 카드사별 이름을 가정하지 않도록 모델이 표의 구조와 의미를 판단해야 한다.
 
-columnMap.date는 거래 날짜 컬럼, columnMap.merchant는 거래 상대방 또는 가맹점 상호 컬럼, columnMap.amount는 개별 거래 금액 컬럼을 가리킨다. 이 세 역할은 반드시 모두 존재해야 한다. columnMap.txnType은 승인, 취소, 부분취소 같은 거래 유형이나 부호 판단을 보조하는 별도 컬럼이 명확히 있을 때만 그 인덱스를 가리킨다. 그런 컬럼이 없거나 확신할 수 없다면 txnType은 null이다. 금액을 합산하거나 행 수를 계산하거나 거래를 분류하지 마라. 여기서 할 일은 헤더 위치와 컬럼 역할 판정뿐이다.
+columnMap.date는 거래 날짜 컬럼, columnMap.merchant는 거래 상대방 또는 가맹점 상호 컬럼, columnMap.amount는 개별 거래 금액 컬럼을 가리킨다. 한 명세서에 숫자 컬럼이 여러 개 놓이는 경우가 흔하다. 적립, 할인, 포인트, 잔액, 수수료, 이자처럼 거래 금액에서 파생되거나 차감되는 보조 컬럼은 amount가 아니다. amount는 그 거래로 실제 청구되는 금액이며, 값이 대체로 양수인 컬럼이다. 이 세 역할은 반드시 모두 존재해야 한다. columnMap.txnType은 승인, 취소, 부분취소 같은 거래 유형이나 부호 판단을 보조하는 별도 컬럼이 명확히 있을 때만 그 인덱스를 가리킨다. 그런 컬럼이 없거나 확신할 수 없다면 txnType은 null이다. 금액을 합산하거나 행 수를 계산하거나 거래를 분류하지 마라. 여기서 할 일은 헤더 위치와 컬럼 역할 판정뿐이다.
 
 모든 컬럼 인덱스는 파일 전체나 데이터 행의 번호가 아니라, 선택한 헤더 행의 셀 배열을 기준으로 하는 0-based 인덱스다. 예를 들어 선택한 헤더 행에 셀이 네 개 있으면 허용되는 컬럼 인덱스는 0, 1, 2, 3뿐이다. date, merchant, amount는 서로 다른 컬럼이어야 한다. txnType이 null이 아니라면 다른 역할과 겹치지 않는 별도 컬럼이어야 한다. 입력에 존재하지 않는 행이나 컬럼을 만들어내지 마라.
 
@@ -48,6 +49,26 @@ function serializeCsv(rows: string[][]): string {
   return rows
     .map((row) => row.map(escapeCsvCell).join(","))
     .join("\n");
+}
+
+/**
+ * 청구 금액 컬럼은 표본에서 적어도 한 번은 양수여야 한다. 양수가 하나도 없으면서
+ * 음수는 있는 컬럼은 적립·할인처럼 차감만 하는 보조 컬럼이고, 그게 amount 로
+ * 뽑히면 모든 거래가 음수로 들어가 합계가 조용히 뒤집힌다. 읽을 금액이 아예
+ * 없으면 판단 근거가 없으므로 거절하지 않는다 — 근거 없는 거절은 멀쩡한 양식을 막는다.
+ */
+function isDeductionColumn(
+  result: MapColumnsResult,
+  rows: string[][],
+): boolean {
+  const amounts = rows
+    .slice(result.headerRowIndex + 1)
+    .map((row) => parseAmount(row[result.columnMap.amount] ?? ""))
+    .filter((value): value is number => value !== null);
+
+  return (
+    amounts.some((value) => value < 0) && !amounts.some((value) => value > 0)
+  );
 }
 
 function validateMapping(
@@ -76,6 +97,10 @@ function validateMapping(
     ) ||
     new Set(indexes).size !== indexes.length
   ) {
+    throw new ClaudeCallError("schema");
+  }
+
+  if (isDeductionColumn(result, rows)) {
     throw new ClaudeCallError("schema");
   }
 

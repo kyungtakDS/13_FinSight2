@@ -251,6 +251,88 @@ describe("runAnalysis", () => {
     expect(mocks.update).toHaveBeenLastCalledWith("user-1", "upload-1", expect.objectContaining({ status: "completed", summary, periodStart: "2026-01-02", periodEnd: "2026-01-02", rowCount: 1, finishedAt: expect.any(String) }));
   });
 
+  // 날짜를 못 읽어 전 행이 버려졌는데 "분석 완료" 로 저장하면, 사용자는 경비가
+  // 0원이라는 틀린 결론을 성공 화면에서 읽는다 (#29).
+  it("fails instead of completing when every input row was skipped", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.normalizeRows.mockReturnValue({ txns: [], skipped: 5, excluded: 0 });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "failed", errorCode: "rows_unreadable" }),
+    );
+    expect(mocks.insertTxns).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("does not call it a failure when the file simply had no data rows", async () => {
+    mocks.normalizeRows.mockReturnValue({ txns: [], skipped: 0, excluded: 0 });
+    mocks.period.mockReturnValue({ start: null, end: null });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+  });
+
+  it("keeps analysing when only some of the rows were skipped", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 2, excluded: 0 });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 0, false, 2);
+    vi.restoreAllMocks();
+  });
+
+  it("logs the row counts and nothing taken from the rows", async () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 2, excluded: 1 });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const line = spy.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("normalize_rows"));
+    const logged = JSON.parse(String(line)) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "normalize_rows",
+      uploadId: "upload-1",
+      inputRows: 4,
+      normalized: 1,
+      skipped: 2,
+    });
+    expect(JSON.stringify(logged)).not.toMatch(/UNIQUE_SHOP|2026-01-02|CARD-9999/u);
+    spy.mockRestore();
+  });
+
+  it("stays quiet when no row was skipped", async () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const lines = spy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((text) => text.includes("normalize_rows"))).toBe(false);
+    spy.mockRestore();
+  });
+
   it("does nothing for an already completed upload", async () => {
     mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
     const { runAnalysis } = await import("./run-analysis");
@@ -842,7 +924,7 @@ describe("runAnalysis 상태 사전", () => {
 
     await runAnalysis("user-1", "upload-1");
 
-    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, false);
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, false, 0);
   });
 
   it("keeps transaction content out of the shared mapping cache", async () => {
@@ -913,7 +995,7 @@ describe("runAnalysis 상태 사전", () => {
 
     await runAnalysis("user-1", "upload-1");
 
-    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, true);
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, true, 0);
   });
 
   it("logs the fallback with a count and a kind but no status value", async () => {
