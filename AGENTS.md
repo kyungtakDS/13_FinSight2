@@ -23,7 +23,7 @@
 - CRITICAL: **로그에 PII를 남기지 마라.** 가맹점명·카드번호·CSV 내용·웹훅 원문 body 금지. 실패 시 에러 코드와 행 수만 남긴다.
 - 컴포넌트는 `src/components/`, 타입은 `src/types/`, 순수 로직은 `src/lib/`, 외부 SDK 래퍼는 `src/services/`.
 - 차트·결과 컴포넌트는 **데이터를 props로 받는다.** 데이터 페칭은 페이지가 한다 — 같은 컴포넌트를 무료(부분 데이터)와 유료(전체 데이터)로 렌더해야 하고, 테스트가 픽스처로 렌더해야 하기 때문이다.
-- 클라이언트로 나가는 에러는 **고정 어휘**만: `parse_failed`·`too_large`·`duplicate_file`·`analysis_failed`·`upstream`·`expired`·`payment_required`. 예외 메시지·SQL 에러를 그대로 실어 보내지 마라.
+- 클라이언트로 나가는 에러는 **고정 어휘**만: `parse_failed`·`rows_unreadable`·`too_large`·`duplicate_file`·`analysis_failed`·`upstream`·`expired`·`payment_required`. 예외 메시지·SQL 에러를 그대로 실어 보내지 마라. `rows_unreadable`은 CSV는 읽었지만 거래 날짜 또는 필수 거래 정보를 해석하지 못한 경우다 — 파일 자체를 읽지 못한 `parse_failed`와 구분한다.
 
 ## 개발 프로세스
 
