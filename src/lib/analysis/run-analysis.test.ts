@@ -131,7 +131,7 @@ describe("runAnalysis", () => {
     mocks.parseRows.mockReturnValue(rows);
     mocks.fingerprint.mockReturnValue("fingerprint");
     mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0, excluded: 0 });
-    mocks.mapStatus.mockResolvedValue({});
+    mocks.mapStatus.mockResolvedValue({ rules: {}, unresolved: 0, failureKind: null });
     mocks.lookup.mockResolvedValue(dictionaryHit());
     mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
     mocks.aggregate.mockReturnValue(summary);
@@ -220,7 +220,7 @@ describe("runAnalysis", () => {
   it.each([
     [new Error("storage"), "parse_failed", "download"],
     [new RowLimitExceeded(), "too_large", "normalize"],
-    [new ClaudeCallError("schema"), "parse_failed", "mapping"],
+    [new ClaudeCallError("schema"), "analysis_failed", "mapping"],
     [new ClaudeCallError("refusal"), "analysis_failed", "classify"],
     [new ClaudeCallError("max_tokens"), "analysis_failed", "classify"],
     [new ClaudeCallError("context_exceeded"), "analysis_failed", "classify"],
@@ -609,6 +609,98 @@ describe("runAnalysis upstream diagnostics", () => {
     );
   });
 
+  // mapping 은 CSV 를 읽는 단계가 아니라 Claude 를 부르는 단계다. parse_failed 로
+  // 적으면 화면이 "CSV 파일을 읽지 못했습니다" 라고 말해 멀쩡한 파일을 의심하게 한다.
+  it("records a mapping-columns Claude failure as analysis_failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mappingClient(false);
+    mocks.mapColumns.mockRejectedValue(new ClaudeCallError("json_parse"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "analysis_failed",
+        errorDetail: expect.objectContaining({ stage: "mapping-columns" }),
+      }),
+    );
+  });
+
+  it("stores the response shape diagnosis and labels the failure as Claude's", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const shape = {
+      textLength: 42,
+      startsWithFence: true,
+      firstCharKind: "backtick",
+      stopReason: "end_turn",
+    };
+    mappingClient(false);
+    mocks.mapColumns.mockRejectedValue(new ClaudeCallError("json_parse", null, shape));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const written = mocks.update.mock.calls.at(-1)?.[2] as { errorDetail: unknown };
+    expect(written.errorDetail).toMatchObject({
+      source: "claude",
+      stage: "mapping-columns",
+      errorName: "ClaudeCallError",
+      responseShape: shape,
+    });
+    expect(JSON.stringify(written.errorDetail)).not.toMatch(
+      /UNIQUE_SHOP|UNIQUE_CSV_CONTENT|CARD-9999|```/u,
+    );
+  });
+
+  it("logs the response shape so the next failure needs no reproduction", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mappingClient(false);
+    mocks.mapColumns.mockRejectedValue(
+      new ClaudeCallError("json_parse", null, {
+        textLength: 42,
+        startsWithFence: true,
+        firstCharKind: "backtick",
+        stopReason: "end_turn",
+      }),
+    );
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "analysis_failed",
+      code: "analysis_failed",
+      stage: "mapping-columns",
+      llmKind: "json_parse",
+      startsWithFence: true,
+      firstCharKind: "backtick",
+      stopReason: "end_turn",
+    });
+    spy.mockRestore();
+  });
+
+  // 0 은 "0행을 정규화했다" 는 측정값처럼 읽힌다. 정규화에 도달조차 못했으면
+  // 측정이 없었다는 뜻이므로 null 이어야 한다.
+  it("leaves the row count null when the run fails before normalization", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mappingClient(false);
+    mocks.mapColumns.mockRejectedValue(new ClaudeCallError("json_parse"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "failed", rowCount: null }),
+    );
+  });
+
   // 실패 기록마저 실패하면 업로드가 processing 에 영원히 갇힌다. 조용히 삼키지 않는다.
   it("reports when persisting the failure itself fails", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -677,7 +769,7 @@ describe("runAnalysis 상태 사전", () => {
     mocks.parseRows.mockReturnValue(statusRows);
     mocks.fingerprint.mockReturnValue("fingerprint");
     mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0, excluded: 1 });
-    mocks.mapStatus.mockResolvedValue(rules);
+    mocks.mapStatus.mockResolvedValue({ rules, unresolved: 0, failureKind: null });
     mocks.lookup.mockResolvedValue(dictionaryHit());
     mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
     mocks.aggregate.mockReturnValue(summary);
@@ -721,7 +813,11 @@ describe("runAnalysis 상태 사전", () => {
 
   it("asks only about status values the cache has never seen", async () => {
     mappingClient(true, { ...statusColumnMap, txnTypeRules: { 전표매입: "normal" } });
-    mocks.mapStatus.mockResolvedValue({ 승인취소: "void" });
+    mocks.mapStatus.mockResolvedValue({
+      rules: { 승인취소: "void" },
+      unresolved: 0,
+      failureKind: null,
+    });
     const { runAnalysis } = await import("./run-analysis");
 
     await runAnalysis("user-1", "upload-1");
@@ -746,7 +842,7 @@ describe("runAnalysis 상태 사전", () => {
 
     await runAnalysis("user-1", "upload-1");
 
-    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1);
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, false);
   });
 
   it("keeps transaction content out of the shared mapping cache", async () => {
@@ -758,6 +854,106 @@ describe("runAnalysis 상태 사전", () => {
     expect(payload).not.toContain("UNIQUE_SHOP");
     expect(payload).not.toContain("UNIQUE_CSV_CONTENT");
     expect(payload).not.toContain("user-1");
+  });
+
+  // 상태 판정 하나가 실패했다고 309행짜리 명세서를 통째로 버리지 않는다.
+  // 사전에 빠진 값은 normalize 가 normal 로 읽으므로 분석은 그대로 끝난다.
+  it("completes the upload when the status mapping falls back", async () => {
+    mocks.mapStatus.mockResolvedValue({
+      rules: {},
+      unresolved: 1,
+      failureKind: "json_parse",
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "completed", errorCode: null }),
+    );
+    expect(mocks.insertTxns).toHaveBeenCalled();
+  });
+
+  // 폴백한 normal 을 캐시에 굳히면 이후 이 양식의 모든 업로드가 조용히 오염된다.
+  it("never writes a fallback verdict to the shared mapping cache", async () => {
+    mocks.mapStatus.mockResolvedValue({
+      rules: {},
+      unresolved: 2,
+      failureKind: "json_parse",
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.mappingUpsert).not.toHaveBeenCalled();
+  });
+
+  it("caches the values it did resolve and leaves the fallback out", async () => {
+    mocks.mapStatus.mockResolvedValue({
+      rules: { 전표매입: "normal" },
+      unresolved: 1,
+      failureKind: "schema",
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(cachedColumnMap().txnTypeRules).toEqual({ 전표매입: "normal" });
+  });
+
+  it("asks the report for a warning when a status stayed unresolved", async () => {
+    mocks.mapStatus.mockResolvedValue({
+      rules: {},
+      unresolved: 1,
+      failureKind: "json_parse",
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1, true);
+  });
+
+  it("logs the fallback with a count and a kind but no status value", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.mapStatus.mockResolvedValue({
+      rules: {},
+      unresolved: 2,
+      failureKind: "json_parse",
+    });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      event: "status_mapping_fallback",
+      uploadId: "upload-1",
+      unresolved: 2,
+      llmKind: "json_parse",
+    });
+    expect(JSON.stringify(logged)).not.toMatch(/전표매입|승인취소|UNIQUE_SHOP/u);
+    spy.mockRestore();
+  });
+
+  it("names the status stage when the status mapping itself throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.mapStatus.mockRejectedValue(new TypeError("x is not a function"));
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({
+        status: "failed",
+        errorDetail: expect.objectContaining({ stage: "mapping-status", source: "internal" }),
+      }),
+    );
+    vi.restoreAllMocks();
   });
 
   it("keeps status values out of the logs", async () => {

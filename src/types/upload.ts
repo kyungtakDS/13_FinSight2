@@ -27,6 +27,16 @@ export interface UploadErrorDetail {
   errorType: string | null;
   requestId: string | null;
   retryable: boolean;
+  /**
+   * JSON 이 아닌 Claude 응답의 형태. 코드 펜스인지 설명문인지 빈 응답인지를
+   * 원문 없이 가른다 — 응답에는 물어본 값이 그대로 되비쳐 나오기 때문이다.
+   */
+  responseShape?: {
+    textLength: number;
+    startsWithFence: boolean;
+    firstCharKind: string;
+    stopReason: string | null;
+  };
 }
 
 /** uploads 테이블의 행. */

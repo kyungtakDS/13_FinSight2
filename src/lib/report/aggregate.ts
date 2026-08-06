@@ -33,12 +33,23 @@ function createInsights(
   uncertainCount: number,
   uncertainTotal: number,
   excludedCount: number,
+  statusUnresolved: boolean,
 ): Insight[] {
   if (txns.length === 0) {
     return [];
   }
 
   const insights: Insight[] = [];
+
+  // 취소 판정에 실패하면 취소 건이 정상 거래로 합계에 들어간다. 세무 자료에서
+  // 과대계상은 누락보다 위험하므로 조용히 넘어가지 않는다 (ADR-014).
+  if (statusUnresolved) {
+    insights.push({
+      id: "status-unresolved",
+      title: "취소 상태를 판정하지 못한 거래가 있습니다",
+      body: "일부 거래의 취소 상태를 판정하지 못해 정상 거래로 포함했을 수 있습니다. 세무대리인과 함께 확인해 주세요.",
+    });
+  }
 
   if (uncertainCount > 0) {
     insights.push({
@@ -97,11 +108,13 @@ function createInsights(
 
 /**
  * `excludedCount` 는 정규화 단계에서 제외된 승인취소 행 수다. 합계에는 들어가지
- * 않으므로 거래 배열로는 전달할 수 없고, 인사이트에만 쓰인다.
+ * 않으므로 거래 배열로는 전달할 수 없고, 인사이트에만 쓰인다. `statusUnresolved`
+ * 는 상태값 판정에 실패해 취소 여부를 모르는 거래가 섞였다는 뜻이다.
  */
 export function aggregate(
   txns: ClassifiedTxn[],
   excludedCount = 0,
+  statusUnresolved = false,
 ): UploadSummary {
   let expenseTotal = 0;
   let personalTotal = 0;
@@ -170,6 +183,7 @@ export function aggregate(
       uncertainCount,
       uncertainTotal,
       excludedCount,
+      statusUnresolved,
     ),
     txnCount: txns.length,
   };

@@ -147,6 +147,88 @@ describe("Claude client", () => {
     expect(error).toMatchObject({ kind: "json_parse" });
   });
 
+  // json_parse 만으로는 코드 펜스인지 설명문인지 빈 응답인지 구분할 수 없어
+  // 재현을 기다리는 것 말고 할 수 있는 게 없다. 원문 대신 형태만 남긴다.
+  it("diagnoses a fenced response without keeping the text", async () => {
+    const text = '```json\n[{"value":"ok"}]\n```';
+    anthropicMock.finalMessage.mockResolvedValue(message("end_turn", text));
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect((error as ClaudeCallError).shape).toEqual({
+      textLength: text.length,
+      startsWithFence: true,
+      firstCharKind: "backtick",
+      stopReason: "end_turn",
+    });
+  });
+
+  it("diagnoses a prose preamble as a letter without a fence", async () => {
+    const text = "Here is the JSON you asked for";
+    anthropicMock.finalMessage.mockResolvedValue(message("end_turn", text));
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect((error as ClaudeCallError).shape).toEqual({
+      textLength: text.length,
+      startsWithFence: false,
+      firstCharKind: "letter",
+      stopReason: "end_turn",
+    });
+  });
+
+  it("diagnoses an empty text block", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(message("end_turn", "   "));
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "json_parse" });
+    expect((error as ClaudeCallError).shape).toMatchObject({
+      textLength: 3,
+      firstCharKind: "none",
+    });
+  });
+
+  it("diagnoses a schema mismatch as valid JSON of the wrong shape", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(message("end_turn", '["a"]'));
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "schema" });
+    expect((error as ClaudeCallError).shape).toMatchObject({
+      startsWithFence: false,
+      firstCharKind: "bracket",
+    });
+  });
+
+  it("diagnoses a response that carries no text block at all", async () => {
+    anthropicMock.finalMessage.mockResolvedValue({
+      stop_reason: "end_turn",
+      content: [{ type: "thinking", thinking: "sensitive merchant" }],
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "schema" });
+    expect((error as ClaudeCallError).shape).toMatchObject({
+      textLength: 0,
+      firstCharKind: "none",
+    });
+  });
+
+  it("keeps the response text out of the shape diagnosis", async () => {
+    const userData = "강남스타카페 2026-01-02 12,000원";
+    anthropicMock.finalMessage.mockResolvedValue(
+      message("end_turn", `요청하신 ${userData} 결과입니다`),
+    );
+
+    const error = await invoke(userData).catch((caught: unknown) => caught);
+    const serialized = JSON.stringify((error as ClaudeCallError).shape);
+
+    expect(serialized).not.toContain("강남스타카페");
+    expect(serialized).not.toContain(userData);
+  });
+
   it("returns the parsed structured object", async () => {
     anthropicMock.finalMessage.mockResolvedValue(
       message("end_turn", '{"value":"ok"}'),
