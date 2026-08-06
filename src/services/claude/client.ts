@@ -35,10 +35,25 @@ export function isRetryableStatus(status: number | null): boolean {
 }
 
 /**
- * 총 3회 시도. 라우트의 maxDuration 이 300초라 무한정 늘릴 수 없다 —
- * 배치를 작게 유지하는 것과 함께 봐야 하는 값이다.
+ * 스트림이 열린 뒤 중간에 도착하는 상류 오류는 HTTP status 없이 온다 — 응답
+ * 헤더는 이미 200 으로 지나갔기 때문이다. status 만 보면 이런 과부하가 영구
+ * 실패로 기록된다. 허용 목록인 이유는 모르는 유형을 재시도 대상으로 열면
+ * 결정적 실패를 세 번씩 반복하게 되기 때문이다.
  */
-export const CLAUDE_MAX_RETRIES = 2;
+const RETRYABLE_ERROR_TYPES = new Set(["overloaded_error", "rate_limit_error"]);
+
+export function isRetryableErrorType(errorType: string | null): boolean {
+  return errorType !== null && RETRYABLE_ERROR_TYPES.has(errorType);
+}
+
+/**
+ * 총 2회 시도. 이 값은 호출자의 재시도와 곱해진다 — 분류는 배치마다 3회까지
+ * 시도하므로 여기서 1 을 넘기면 배치 하나가 최악 9회 호출이 되어 라우트의
+ * maxDuration 300초 안에 들어온다고 볼 수 없다. 0 이 아닌 이유는 배치 재시도가
+ * 없는 호출자(mapColumns)에게도 연결 단계 실패에 대한 한 번의 기회는 남겨야
+ * 하기 때문이다.
+ */
+export const CLAUDE_MAX_RETRIES = 1;
 
 function readString(
   source: Record<string, unknown> | undefined,
@@ -58,16 +73,17 @@ function upstreamDetail(error: unknown): UpstreamDetail {
   const status = typeof source.status === "number" ? source.status : null;
   const body = source.error as Record<string, unknown> | undefined;
   const nested = body?.error as Record<string, unknown> | undefined;
+  const errorType =
+    readString(nested, "type") ??
+    readString(body, "type") ??
+    (error instanceof Error ? error.name : null);
 
   return {
     status,
-    errorType:
-      readString(nested, "type") ??
-      readString(body, "type") ??
-      (error instanceof Error ? error.name : null),
+    errorType,
     requestId:
       readString(source, "request_id") ?? readString(source, "requestID"),
-    retryable: isRetryableStatus(status),
+    retryable: isRetryableStatus(status) || isRetryableErrorType(errorType),
   };
 }
 

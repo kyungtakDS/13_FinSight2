@@ -13,10 +13,16 @@ vi.mock("./client", async (importOriginal) => {
 });
 
 import { ACCOUNT_CODES } from "@/types/account-codes";
-import { ClaudeCallError } from "./client";
+import {
+  ClaudeCallError,
+  CLAUDE_MAX_RETRIES,
+  type UpstreamDetail,
+} from "./client";
 import {
   CLASSIFY_BATCH_SIZE,
+  CLASSIFY_MAX_ATTEMPTS,
   classifyMerchants,
+  retryDelayMs,
   type MerchantVerdict,
 } from "./classify-merchants";
 
@@ -595,5 +601,272 @@ describe("classifyMerchants batching", () => {
     }).catch((caught: unknown) => caught);
 
     expect(error).toBe(failure);
+  });
+});
+
+const OVERLOADED: UpstreamDetail = {
+  status: null,
+  errorType: "overloaded_error",
+  requestId: "req_overloaded",
+  retryable: true,
+};
+
+function upstream(detail: Partial<UpstreamDetail> = {}): ClaudeCallError {
+  return new ClaudeCallError("upstream", { ...OVERLOADED, ...detail });
+}
+
+/** 실제로 기다리지 않고 지연 값만 기록한다. */
+function recordingSleep(): { calls: number[]; sleep: (ms: number) => Promise<void> } {
+  const calls: number[] = [];
+  return {
+    calls,
+    sleep: async (ms: number) => {
+      calls.push(ms);
+    },
+  };
+}
+
+describe("classifyMerchants retry", () => {
+  beforeEach(() => {
+    clientMock.callStructured.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function succeed({ userData }: { userData: string }) {
+    const batch = JSON.parse(userData) as string[];
+    return batch.map((_, index) => result(index));
+  }
+
+  it("grows the backoff exponentially within a jittered window", () => {
+    expect(retryDelayMs(1, 0)).toBe(500);
+    expect(retryDelayMs(1, 1)).toBe(1_000);
+    expect(retryDelayMs(2, 0)).toBe(1_000);
+    expect(retryDelayMs(2, 1)).toBe(2_000);
+  });
+
+  it("jitters with Math.random when no sample is supplied", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    expect(retryDelayMs(1)).toBe(750);
+    expect(retryDelayMs(2)).toBe(1_500);
+  });
+
+  it("allows two extra attempts after the first", () => {
+    expect(CLASSIFY_MAX_ATTEMPTS).toBe(3);
+  });
+
+  // 두 재시도 계층은 곱해진다. 라우트의 maxDuration 이 300초라 배치 하나가 쓸 수
+  // 있는 호출 수에는 상한이 있어야 한다 — 어느 쪽 상수를 올리든 여기서 걸린다.
+  it("bounds the worst-case upstream calls for a single batch", () => {
+    expect(CLASSIFY_MAX_ATTEMPTS * (CLAUDE_MAX_RETRIES + 1)).toBeLessThanOrEqual(
+      6,
+    );
+  });
+
+  it("bounds the total backoff spent on a single batch", () => {
+    const worstCase = Array.from(
+      { length: CLASSIFY_MAX_ATTEMPTS - 1 },
+      (_, index) => retryDelayMs(index + 1, 1),
+    ).reduce((total, delay) => total + delay, 0);
+
+    expect(worstCase).toBeLessThanOrEqual(3_000);
+  });
+
+  it("recovers when the first attempt fails and the second succeeds", async () => {
+    const { calls, sleep } = recordingSleep();
+    clientMock.callStructured
+      .mockRejectedValueOnce(upstream())
+      .mockImplementation(succeed);
+
+    const verdicts = await classifyMerchants(["상호 A", "상호 B"], { sleep });
+
+    expect(verdicts).toHaveLength(2);
+    expect(clientMock.callStructured).toHaveBeenCalledTimes(2);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("recovers when two attempts fail and the third succeeds", async () => {
+    const { calls, sleep } = recordingSleep();
+    clientMock.callStructured
+      .mockRejectedValueOnce(upstream())
+      .mockRejectedValueOnce(upstream())
+      .mockImplementation(succeed);
+
+    const verdicts = await classifyMerchants(["상호 A"], { sleep });
+
+    expect(verdicts).toHaveLength(1);
+    expect(clientMock.callStructured).toHaveBeenCalledTimes(3);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!).toBeGreaterThan(calls[0]!);
+  });
+
+  it("stops after the maximum attempts and keeps the last detail", async () => {
+    const { sleep } = recordingSleep();
+    clientMock.callStructured
+      .mockRejectedValueOnce(upstream({ requestId: "req_first" }))
+      .mockRejectedValueOnce(upstream({ requestId: "req_second" }))
+      .mockRejectedValueOnce(upstream({ requestId: "req_last" }));
+
+    const error = await classifyMerchants(["상호 A"], { sleep }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(clientMock.callStructured).toHaveBeenCalledTimes(
+      CLASSIFY_MAX_ATTEMPTS,
+    );
+    expect(error).toBeInstanceOf(ClaudeCallError);
+    expect(error).toMatchObject({
+      kind: "upstream",
+      detail: {
+        errorType: "overloaded_error",
+        requestId: "req_last",
+        retryable: true,
+      },
+    });
+  });
+
+  it("fails immediately on an upstream error that is not retryable", async () => {
+    const { calls, sleep } = recordingSleep();
+    const failure = upstream({
+      status: 400,
+      errorType: "invalid_request_error",
+      retryable: false,
+    });
+    clientMock.callStructured.mockRejectedValue(failure);
+
+    await expect(classifyMerchants(["상호 A"], { sleep })).rejects.toBe(failure);
+    expect(clientMock.callStructured).toHaveBeenCalledOnce();
+    expect(calls).toHaveLength(0);
+  });
+
+  // 응답 형태 문제는 다시 걸어도 같은 답이 온다. 재시도 대상으로 열면 배치마다
+  // 시간과 토큰만 3배로 쓰고 같은 지점에서 죽는다.
+  it.each(["schema", "json_parse", "refusal", "max_tokens"] as const)(
+    "does not retry a %s failure",
+    async (kind) => {
+      const { calls, sleep } = recordingSleep();
+      clientMock.callStructured.mockRejectedValue(new ClaudeCallError(kind));
+
+      await expect(
+        classifyMerchants(["상호 A"], { sleep }),
+      ).rejects.toBeInstanceOf(ClaudeCallError);
+      expect(clientMock.callStructured).toHaveBeenCalledOnce();
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  // 재시도는 죽은 배치 하나만 다시 건다. 앞 배치까지 다시 분류하면 부분 저장으로
+  // 아낀 비용이 그대로 되돌아간다.
+  it("retries only the failed batch and never re-sends an earlier one", async () => {
+    const { sleep } = recordingSleep();
+    const names = syntheticMerchants(131);
+    let secondBatchAttempts = 0;
+    clientMock.callStructured.mockImplementation(
+      async (params: { userData: string }) => {
+        const batch = JSON.parse(params.userData) as string[];
+        if (batch[0] === names[CLASSIFY_BATCH_SIZE]) {
+          secondBatchAttempts += 1;
+          if (secondBatchAttempts === 1) {
+            throw upstream();
+          }
+        }
+        return succeed(params);
+      },
+    );
+    const completed: string[] = [];
+
+    const verdicts = await classifyMerchants(names, {
+      sleep,
+      onBatchComplete: ({ names: batchNames }) => {
+        completed.push(...batchNames);
+      },
+    });
+
+    expect(verdicts).toHaveLength(131);
+    expect(completed).toEqual(names);
+    const sent = clientMock.callStructured.mock.calls.map(
+      ([{ userData }]: [{ userData: string }]) =>
+        (JSON.parse(userData) as string[])[0],
+    );
+    expect(sent.filter((first: string) => first === names[0])).toHaveLength(1);
+  });
+
+  it("logs one structured record per retry with the diagnostic fields", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { sleep } = recordingSleep();
+    clientMock.callStructured
+      .mockRejectedValueOnce(upstream({ status: 529 }))
+      .mockImplementation(succeed);
+
+    await classifyMerchants(["상호 A"], { sleep });
+
+    expect(warn).toHaveBeenCalledOnce();
+    const record = JSON.parse(warn.mock.calls[0]![0] as string);
+    expect(record).toMatchObject({
+      event: "classify_batch_retry",
+      batchIndex: 1,
+      attempt: 1,
+      maxAttempts: CLASSIFY_MAX_ATTEMPTS,
+      errorType: "overloaded_error",
+      status: 529,
+      requestId: "req_overloaded",
+    });
+    expect(record.delayMs).toBeGreaterThan(0);
+  });
+
+  it("numbers the attempts and the batch that actually failed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { sleep } = recordingSleep();
+    const names = syntheticMerchants(CLASSIFY_BATCH_SIZE + 1);
+    let lastBatchAttempts = 0;
+    clientMock.callStructured.mockImplementation(
+      async (params: { userData: string }) => {
+        const batch = JSON.parse(params.userData) as string[];
+        if (batch.length === 1) {
+          lastBatchAttempts += 1;
+          if (lastBatchAttempts <= 2) {
+            throw upstream();
+          }
+        }
+        return succeed(params);
+      },
+    );
+
+    await classifyMerchants(names, { sleep });
+
+    const records = warn.mock.calls.map(
+      ([line]) => JSON.parse(line as string) as Record<string, unknown>,
+    );
+    expect(records.map((record) => record.attempt)).toEqual([1, 2]);
+    expect(records.map((record) => record.batchIndex)).toEqual([2, 2]);
+  });
+
+  it("keeps merchant names and upstream messages out of the retry log", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { sleep } = recordingSleep();
+    const canary = "가맹점명_CANARY_UNIQUE";
+    clientMock.callStructured
+      .mockRejectedValueOnce(upstream())
+      .mockImplementation(succeed);
+
+    await classifyMerchants([canary], { sleep });
+
+    const logged = warn.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(logged).not.toContain(canary);
+    expect(logged).not.toContain("Claude request failed");
+  });
+
+  it("never sleeps or logs when every batch succeeds", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { calls, sleep } = recordingSleep();
+    clientMock.callStructured.mockImplementation(succeed);
+
+    await classifyMerchants(syntheticMerchants(131), { sleep });
+
+    expect(calls).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
