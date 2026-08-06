@@ -132,6 +132,26 @@ describe("aggregate", () => {
     expect(insights.some(({ id }) => id === "cancellations")).toBe(true);
   });
 
+  it("reports voided rows that never reached the transaction list", () => {
+    const voided = aggregate([txn(1, 100)], 16).insights.find(({ id }) => id === "voided");
+    expect(voided?.title).toContain("16");
+  });
+
+  it("omits the voided insight when nothing was excluded", () => {
+    expect(aggregate([txn(1, 100)]).insights.some(({ id }) => id === "voided")).toBe(false);
+    expect(aggregate([txn(1, 100)], 0).insights.some(({ id }) => id === "voided")).toBe(false);
+  });
+
+  it("keeps voided rows out of every total", () => {
+    const summary = aggregate([txn(1, 100)], 16);
+    expect(summary).toMatchObject({ expenseTotal: 100, txnCount: 1, estimatedSaving: 6 });
+  });
+
+  it("puts only counts in the voided insight", () => {
+    const voided = aggregate([txn(1, 100)], 2).insights.find(({ id }) => id === "voided")!;
+    expect(`${voided.title} ${voided.body}`).not.toMatch(/merchant-|100/);
+  });
+
   it("returns no insights for no data", () => {
     expect(aggregate([]).insights).toEqual([]);
   });

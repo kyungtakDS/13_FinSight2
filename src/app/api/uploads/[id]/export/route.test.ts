@@ -102,7 +102,8 @@ describe("GET /api/uploads/[id]/export", () => {
     expect(csv).toContain("거래일자,가맹점명,금액,계정과목,판정,근거");
     expect(csv).toContain("복리후생비"); expect(csv).not.toContain(",welfare,");
     expect(csv).toContain("사업 경비"); expect(csv).toContain("개인 지출"); expect(csv).toContain("애매");
-    expect(csv).toContain("-8900");
+    expect(csv).toContain(",-8900,");
+    expect(csv).not.toContain("'-8900");
     expect(csv).toContain(`"${SECRET}"`); expect(csv).toContain('"A""B"');
     expect(csv).toContain("'=cmd|' /C calc'!A0");
     expect(csv).toContain("업무 식사");
@@ -117,6 +118,17 @@ describe("GET /api/uploads/[id]/export", () => {
     })), error: null });
     const { GET } = await import("./route"); const csv = await (await GET(req(), ctx)).text();
     for (const prefix of ["'=x", "'+x", "'-x", "'@x", "'\tx", "'\rx"]) expect(csv).toContain(prefix);
+  });
+
+  // 취소전표매입이 음수로 들어오면서 생긴 회귀 — 수식 방어가 숫자까지 텍스트로 만들면
+  // 세무사가 받는 파일에서 금액 열의 합계가 잡히지 않는다.
+  it("21b. keeps negative amounts numeric while still escaping negative-looking text", async () => {
+    mocks.transactionResult.mockReturnValue({ data: [
+      { row_index: 1, txn_date: "2026-01-05", merchant: "-가맹점", amount: -149900, account_code: "vehicle", verdict: "expense" },
+    ], error: null });
+    const { GET } = await import("./route"); const csv = await (await GET(req(), ctx)).text();
+    expect(csv).toContain(",-149900,");
+    expect(csv).toContain("'-가맹점");
   });
 
   it("22-24. sets CSV download headers using only server-generated filename parts", async () => {

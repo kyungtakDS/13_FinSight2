@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   normalizeRows: vi.fn(),
   fingerprint: vi.fn(),
   mapColumns: vi.fn(),
+  mapStatus: vi.fn(),
   lookup: vi.fn(),
   upsert: vi.fn(),
   key: vi.fn((value: string) => value.toLowerCase()),
@@ -53,6 +54,7 @@ vi.mock("@/lib/csv/fingerprint", () => ({
   headerFingerprint: mocks.fingerprint,
 }));
 vi.mock("@/services/claude/map-columns", () => ({ mapColumns: mocks.mapColumns }));
+vi.mock("@/services/claude/map-status", () => ({ mapStatusValues: mocks.mapStatus }));
 vi.mock("@/lib/classify/dictionary", () => ({
   lookupMerchants: mocks.lookup,
   upsertMerchants: mocks.upsert,
@@ -80,9 +82,9 @@ const normalized = [{ rowIndex: 1, txnDate: "2026-01-02", merchant: "UNIQUE_SHOP
 const mapping = { headerRowIndex: 0, columnMap: { date: 0, merchant: 1, amount: 2, txnType: null } };
 const summary = { expenseTotal: 1000, personalTotal: 0, uncertainCount: 0, uncertainTotal: 0, estimatedSaving: 66, taxRate: 0.066, accounts: [], insights: [], txnCount: 1 };
 
-function mappingClient(hit: boolean) {
+function mappingClient(hit: boolean, columnMap: Record<string, unknown> = mapping.columnMap) {
   mocks.mappingMaybeSingle.mockResolvedValue({
-    data: hit ? { header_row_index: 0, column_map: mapping.columnMap, encoding: "utf-8" } : null,
+    data: hit ? { header_row_index: 0, column_map: columnMap, encoding: "utf-8" } : null,
     error: null,
   });
   const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: mocks.mappingMaybeSingle, upsert: mocks.mappingUpsert };
@@ -128,7 +130,8 @@ describe("runAnalysis", () => {
     mocks.decodeCsv.mockReturnValue("CARD-9999,UNIQUE_CSV_CONTENT");
     mocks.parseRows.mockReturnValue(rows);
     mocks.fingerprint.mockReturnValue("fingerprint");
-    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0 });
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0, excluded: 0 });
+    mocks.mapStatus.mockResolvedValue({});
     mocks.lookup.mockResolvedValue(dictionaryHit());
     mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
     mocks.aggregate.mockReturnValue(summary);
@@ -159,7 +162,7 @@ describe("runAnalysis", () => {
 
   it("sends only dictionary misses to Claude and stores definite results", async () => {
     const two = [...normalized, { ...normalized[0]!, rowIndex: 2, merchant: "MISSING_SHOP" }];
-    mocks.normalizeRows.mockReturnValue({ txns: two, skipped: 0 });
+    mocks.normalizeRows.mockReturnValue({ txns: two, skipped: 0, excluded: 0 });
     mocks.lookup.mockResolvedValue(dictionaryHit());
     mocks.classify.mockImplementation(classifyingAs({ accountCode: "travel", verdict: "expense", reason: "fixture" }));
     const { runAnalysis } = await import("./run-analysis");
@@ -332,7 +335,7 @@ describe("runAnalysis upstream diagnostics", () => {
     mocks.decodeCsv.mockReturnValue("CARD-9999,UNIQUE_CSV_CONTENT");
     mocks.parseRows.mockReturnValue(rows);
     mocks.fingerprint.mockReturnValue("fingerprint");
-    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0 });
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0, excluded: 0 });
     mocks.lookup.mockResolvedValue(new Map());
     mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
     mocks.aggregate.mockReturnValue(summary);
@@ -451,7 +454,7 @@ describe("runAnalysis upstream diagnostics", () => {
       merchant: `가맹점 ${index + 1}호점`,
       amount: 1000,
     }));
-    mocks.normalizeRows.mockReturnValue({ txns, skipped: 0 });
+    mocks.normalizeRows.mockReturnValue({ txns, skipped: 0, excluded: 0 });
     mocks.classify.mockImplementation(async (names: string[], options?: BatchOptions) => {
       const batchSize = CLASSIFY_BATCH_SIZE;
       for (let offset = 0; offset < names.length; offset += batchSize) {
@@ -649,5 +652,129 @@ describe("runAnalysis upstream diagnostics", () => {
     for (const [entries] of mocks.upsert.mock.calls as [unknown[]][]) {
       expect(entries).toHaveLength(0);
     }
+  });
+});
+
+describe("runAnalysis 상태 사전", () => {
+  const statusRows = [
+    ["date", "merchant", "amount", "status"],
+    ["2026-01-02", "UNIQUE_SHOP", "1000", "전표매입"],
+    ["2026-01-03", "UNIQUE_SHOP", "2000", "승인취소"],
+  ];
+  const statusColumnMap = { date: 0, merchant: 1, amount: 2, txnType: 3 };
+  const rules = { 전표매입: "normal", 승인취소: "void" };
+
+  function cachedColumnMap() {
+    return mocks.mappingUpsert.mock.calls[0]?.[0].column_map as Record<string, unknown>;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUpload.mockResolvedValue(upload);
+    mocks.download.mockResolvedValue(new Uint8Array([1]));
+    mocks.detectEncoding.mockReturnValue("utf-8");
+    mocks.decodeCsv.mockReturnValue("UNIQUE_CSV_CONTENT");
+    mocks.parseRows.mockReturnValue(statusRows);
+    mocks.fingerprint.mockReturnValue("fingerprint");
+    mocks.normalizeRows.mockReturnValue({ txns: normalized, skipped: 0, excluded: 1 });
+    mocks.mapStatus.mockResolvedValue(rules);
+    mocks.lookup.mockResolvedValue(dictionaryHit());
+    mocks.upsert.mockResolvedValue({ inserted: 0, rejected: 0 });
+    mocks.aggregate.mockReturnValue(summary);
+    mocks.period.mockReturnValue({ start: "2026-01-02", end: "2026-01-02" });
+    mocks.update.mockResolvedValue(undefined);
+    mocks.removeTxns.mockResolvedValue(undefined);
+    mocks.insertTxns.mockResolvedValue(undefined);
+    mappingClient(true, statusColumnMap);
+  });
+
+  it("asks Claude for the distinct status values and caches the answer", async () => {
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.mapStatus).toHaveBeenCalledWith(["전표매입", "승인취소"]);
+    expect(cachedColumnMap()).toEqual({ ...statusColumnMap, txnTypeRules: rules });
+  });
+
+  it("passes the cached rules to normalizeRows", async () => {
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.normalizeRows).toHaveBeenCalledWith(
+      statusRows,
+      expect.objectContaining({ txnTypeRules: rules }),
+      0,
+    );
+  });
+
+  it("reuses a cached dictionary without calling Claude", async () => {
+    mappingClient(true, { ...statusColumnMap, txnTypeRules: rules });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.mapStatus).not.toHaveBeenCalled();
+    expect(mocks.mappingUpsert).not.toHaveBeenCalled();
+  });
+
+  it("asks only about status values the cache has never seen", async () => {
+    mappingClient(true, { ...statusColumnMap, txnTypeRules: { 전표매입: "normal" } });
+    mocks.mapStatus.mockResolvedValue({ 승인취소: "void" });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.mapStatus).toHaveBeenCalledWith(["승인취소"]);
+    expect(cachedColumnMap().txnTypeRules).toEqual(rules);
+  });
+
+  it("skips the status call entirely when the format has no status column", async () => {
+    mocks.parseRows.mockReturnValue(rows);
+    mappingClient(true, mapping.columnMap);
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.mapStatus).not.toHaveBeenCalled();
+    expect(mocks.mappingUpsert).not.toHaveBeenCalled();
+  });
+
+  it("hands the excluded count to aggregate", async () => {
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 1);
+  });
+
+  it("keeps transaction content out of the shared mapping cache", async () => {
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const payload = JSON.stringify(mocks.mappingUpsert.mock.calls[0]![0]);
+    expect(payload).not.toContain("UNIQUE_SHOP");
+    expect(payload).not.toContain("UNIQUE_CSV_CONTENT");
+    expect(payload).not.toContain("user-1");
+  });
+
+  it("keeps status values out of the logs", async () => {
+    const spies = [
+      vi.spyOn(console, "info").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+    ];
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    const logged = spies.flatMap((spy) => spy.mock.calls.map((args) => String(args[0])));
+    for (const line of logged) {
+      expect(line).not.toContain("전표매입");
+      expect(line).not.toContain("UNIQUE_SHOP");
+    }
+    vi.restoreAllMocks();
   });
 });

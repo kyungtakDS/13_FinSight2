@@ -6,6 +6,7 @@ import {
 } from "@/lib/classify/dictionary";
 import { FINGERPRINT_ROWS, headerFingerprint } from "@/lib/csv/fingerprint";
 import {
+  collectStatusValues,
   decodeCsv,
   detectEncoding,
   normalizeRows,
@@ -33,6 +34,7 @@ import {
   type UpstreamDetail,
 } from "@/services/claude/client";
 import { mapColumns } from "@/services/claude/map-columns";
+import { mapStatusValues } from "@/services/claude/map-status";
 import type { ColumnMap } from "@/types/csv";
 import type { ErrorCode } from "@/types/errors";
 import type { ClassifiedTxn, NormalizedTxn, Verdict } from "@/types/transaction";
@@ -272,6 +274,7 @@ export async function runAnalysis(
     const cached = await readMapping(fingerprint);
     let headerRowIndex: number;
     let columnMap: ColumnMap;
+    let mappingChanged = false;
     if (cached) {
       headerRowIndex = cached.header_row_index;
       columnMap = cached.column_map;
@@ -280,12 +283,30 @@ export async function runAnalysis(
       const mapped = await mapColumns(rows.slice(0, FINGERPRINT_ROWS));
       headerRowIndex = mapped.headerRowIndex;
       columnMap = mapped.columnMap;
+      mappingChanged = true;
+    }
+
+    // 상태값의 의미는 카드사마다 다르므로 코드가 아니라 모델이 판정한다. 사전은
+    // 양식 단위라 같은 카드사 파일을 다시 올리면 LLM 호출 없이 캐시로 끝난다.
+    const knownRules = columnMap.txnTypeRules ?? {};
+    const newStatusValues = collectStatusValues(rows, columnMap, headerRowIndex)
+      .filter((value) => !(value in knownRules));
+    if (newStatusValues.length > 0) {
+      stage = "mapping";
+      columnMap = {
+        ...columnMap,
+        txnTypeRules: { ...knownRules, ...(await mapStatusValues(newStatusValues)) },
+      };
+      mappingChanged = true;
+    }
+
+    if (mappingChanged) {
       stage = "mapping-cache";
       await saveMapping(fingerprint, headerRowIndex, columnMap, encoding);
     }
 
     stage = "parse";
-    const normalized = normalizeRows(rows, columnMap, headerRowIndex).txns;
+    const { txns: normalized, excluded } = normalizeRows(rows, columnMap, headerRowIndex);
     rowCount = normalized.length;
     stage = "classify";
     const keys = [...new Set(normalized.map((txn) => merchantKey(txn.merchant)))];
@@ -335,7 +356,7 @@ export async function runAnalysis(
     stage = "persist";
     await deleteTransactionsForUser(userId, uploadId);
     await insertTransactionsForUser(userId, uploadId, classified);
-    const summary = aggregate(classified);
+    const summary = aggregate(classified, excluded);
     const period = txnPeriod(classified);
     await updateUploadForUser(userId, uploadId, {
       status: "completed",

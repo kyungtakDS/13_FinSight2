@@ -32,6 +32,7 @@ function createInsights(
   personalTotal: number,
   uncertainCount: number,
   uncertainTotal: number,
+  excludedCount: number,
 ): Insight[] {
   if (txns.length === 0) {
     return [];
@@ -44,6 +45,16 @@ function createInsights(
       id: "uncertain",
       title: `애매한 거래 ${uncertainCount.toLocaleString("ko-KR")}건`,
       body: `분류가 애매한 거래 ${formatWon(uncertainTotal)}은 예상 절감액에서 제외했습니다. 세무대리인과 별도로 확인해 주세요.`,
+    });
+  }
+
+  // 제외된 행은 거래 내역에도 세무사 파일에도 없다. 명세서 건수와 리포트 건수가
+  // 어긋나는 이유가 여기 말고는 드러나지 않으므로 건수를 밝힌다.
+  if (excludedCount > 0) {
+    insights.push({
+      id: "voided",
+      title: `취소된 거래 ${excludedCount.toLocaleString("ko-KR")}건 제외`,
+      body: "승인이 취소되어 청구되지 않은 거래는 명세서에 남아 있어도 합계와 거래 내역에서 제외했습니다.",
     });
   }
 
@@ -84,7 +95,14 @@ function createInsights(
   return insights;
 }
 
-export function aggregate(txns: ClassifiedTxn[]): UploadSummary {
+/**
+ * `excludedCount` 는 정규화 단계에서 제외된 승인취소 행 수다. 합계에는 들어가지
+ * 않으므로 거래 배열로는 전달할 수 없고, 인사이트에만 쓰인다.
+ */
+export function aggregate(
+  txns: ClassifiedTxn[],
+  excludedCount = 0,
+): UploadSummary {
   let expenseTotal = 0;
   let personalTotal = 0;
   let uncertainCount = 0;
@@ -151,6 +169,7 @@ export function aggregate(txns: ClassifiedTxn[]): UploadSummary {
       personalTotal,
       uncertainCount,
       uncertainTotal,
+      excludedCount,
     ),
     txnCount: txns.length,
   };
