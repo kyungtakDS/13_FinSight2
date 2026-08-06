@@ -210,7 +210,7 @@ nav(브랜드·링크 3개·테마 토글·로그인·무료로 시작하기) �
 - **잠긴 상태가 곧 결제 화면이다.** `.fs-lockwrap`: 상위 6행을 blur 처리해 **무엇이** 잠겼는지 보여주고, 스크림에 잠긴 건수 · 설명 · Pro CTA를 얹는다.
   **잠긴 거래 행을 클라이언트로 보내고 blur로 가리지 마라. 이유: 그것은 게이트가 아니라 장식이다.** 서버가 자른 뒤 보낸 **부분 데이터**를 blur하는 것이며, 무료 사용자의 페이로드에는 실제 거래 행이 들어 있지 않다(ADR-019). blur는 순전히 시각 장치다.
 - **애매 n건을 숨기지 않는다.** 리포트 상단에 배너로 표시하고 "세무사에게 따로 확인하세요"까지 말한다.
-- **실패 문구는 고정 어휘 7개에서만** 나온다: `parse_failed` · `too_large` · `duplicate_file` · `analysis_failed` · `upstream` · `expired` · `payment_required`. 예외 메시지·SQL 에러·모델 원문을 화면에 띄우지 마라.
+- **실패 문구는 고정 어휘 8개에서만** 나온다: `parse_failed` · `rows_unreadable` · `too_large` · `duplicate_file` · `analysis_failed` · `upstream` · `expired` · `payment_required`. 예외 메시지·SQL 에러·모델 원문을 화면에 띄우지 마라. `rows_unreadable`은 CSV는 읽었지만 거래 날짜 또는 필수 거래 정보를 해석하지 못한 경우이므로, 파일을 읽지 못했다는 `parse_failed` 문구를 재사용하지 마라.
 - 거래가 3건뿐이면 도넛 대신 표로 대체한다.
 
 **진행률을 지어내지 마라.** 서버는 `processing | completed | failed` 3상태만 준다(ARCHITECTURE.md). `.fs-step` 단계 리스트는 *무엇을 하는 중인지* 설명하는 장치이며, 확정 퍼센트를 계산해 표시하지 마라 — 근거가 되는 데이터가 없다. 진행바는 indeterminate로 둔다.

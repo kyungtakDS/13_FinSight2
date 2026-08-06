@@ -225,9 +225,9 @@ webhook_events(event_id text pk, event_type text not null,
 
 ## 오류 처리
 
-클라이언트로 나가는 에러는 **고정 어휘**만 쓴다: `parse_failed` · `too_large` · `duplicate_file` · `analysis_failed` · `upstream` · `expired` · `payment_required`.
+클라이언트로 나가는 에러는 **고정 어휘**만 쓴다: `parse_failed` · `rows_unreadable` · `too_large` · `duplicate_file` · `analysis_failed` · `upstream` · `expired` · `payment_required`.
 
-어휘는 **사용자가 취할 수 있는 행동 단위**로 나눈다. 파싱 실패와 컬럼 매핑 실패는 사용자에게 같은 말("이 파일을 읽지 못했습니다")이므로 `parse_failed` 하나다. 진단을 위한 세부 구분은 서버 로그에만 남긴다.
+어휘는 **사용자가 취할 수 있는 행동 단위**로 나눈다. 파싱 실패와 컬럼 매핑 실패는 사용자에게 같은 말("이 파일을 읽지 못했습니다")이므로 `parse_failed` 하나다. 반면 CSV는 읽었지만 거래 날짜 또는 필수 거래 정보를 해석하지 못한 경우는 사용자가 할 일이 다르므로(명세서를 원본 형식 그대로 다시 내려받기) `rows_unreadable`로 나눈다. 진단을 위한 세부 구분은 서버 로그에만 남긴다.
 
 예외 메시지·SQL 에러·모델 원문을 그대로 실어 보내지 않는다. 로그에도 가맹점명·카드번호·CSV 내용·웹훅 원문 body를 남기지 않는다 — 실패 시 에러 코드와 행 수만 남긴다.
 
