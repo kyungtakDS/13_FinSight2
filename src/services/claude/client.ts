@@ -18,6 +18,29 @@ export interface UpstreamDetail {
   retryable: boolean;
 }
 
+export type FirstCharKind =
+  | "none"
+  | "brace"
+  | "bracket"
+  | "quote"
+  | "backtick"
+  | "digit"
+  | "letter"
+  | "other";
+
+/**
+ * JSON 이 아닌 응답을 재현 없이 진단하기 위한 형태 정보. `json_parse` 만으로는
+ * 코드 펜스인지 설명문인지 빈 응답인지 구분할 수 없어 다음 실패를 기다리는 것
+ * 말고 할 수 있는 게 없다. 원문·길이 외의 내용은 담지 않는다 — 응답에는 물어본
+ * 값이 그대로 되비쳐 나오기 때문이다.
+ */
+export interface ResponseShape {
+  textLength: number;
+  startsWithFence: boolean;
+  firstCharKind: FirstCharKind;
+  stopReason: string | null;
+}
+
 const ERROR_MESSAGES: Record<ClaudeCallErrorKind, string> = {
   refusal: "Claude refused the request.",
   max_tokens: "Claude reached the output token limit.",
@@ -87,18 +110,43 @@ function upstreamDetail(error: unknown): UpstreamDetail {
   };
 }
 
+function firstCharKind(text: string): FirstCharKind {
+  const char = text.trimStart().charAt(0);
+
+  if (char === "") return "none";
+  if (char === "{") return "brace";
+  if (char === "[") return "bracket";
+  if (char === '"') return "quote";
+  if (char === "`") return "backtick";
+  if (/\d/u.test(char)) return "digit";
+  if (/\p{L}/u.test(char)) return "letter";
+  return "other";
+}
+
+function responseShape(text: string, stopReason: string | null): ResponseShape {
+  return {
+    textLength: text.length,
+    startsWithFence: text.trimStart().startsWith("```"),
+    firstCharKind: firstCharKind(text),
+    stopReason,
+  };
+}
+
 export class ClaudeCallError extends Error {
   readonly kind: ClaudeCallErrorKind;
   readonly detail: UpstreamDetail | null;
+  readonly shape: ResponseShape | null;
 
   constructor(
     kind: ClaudeCallErrorKind,
     detail: UpstreamDetail | null = null,
+    shape: ResponseShape | null = null,
   ) {
     super(ERROR_MESSAGES[kind]);
     this.name = "ClaudeCallError";
     this.kind = kind;
     this.detail = detail;
+    this.shape = shape;
   }
 }
 
@@ -157,9 +205,10 @@ export async function callStructured<T>(opts: {
   }
 
   const textBlock = message.content.find((block) => block.type === "text");
+  const shape = responseShape(textBlock?.text ?? "", message.stop_reason);
 
   if (!textBlock) {
-    throw new ClaudeCallError("schema");
+    throw new ClaudeCallError("schema", null, shape);
   }
 
   // JSON 이 아예 아닌 것과 JSON 은 맞는데 형태가 다른 것을 나눈다.
@@ -168,12 +217,12 @@ export async function callStructured<T>(opts: {
   try {
     payload = JSON.parse(textBlock.text);
   } catch {
-    throw new ClaudeCallError("json_parse");
+    throw new ClaudeCallError("json_parse", null, shape);
   }
 
   try {
     return opts.schema.parse(payload);
   } catch {
-    throw new ClaudeCallError("schema");
+    throw new ClaudeCallError("schema", null, shape);
   }
 }

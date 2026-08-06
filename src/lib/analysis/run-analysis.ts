@@ -31,6 +31,7 @@ import {
 import {
   ClaudeCallError,
   type ClaudeCallErrorKind,
+  type ResponseShape,
   type UpstreamDetail,
 } from "@/services/claude/client";
 import { mapColumns } from "@/services/claude/map-columns";
@@ -44,7 +45,8 @@ type Stage =
   | "load"
   | "parse"
   | "mapping-cache"
-  | "mapping"
+  | "mapping-columns"
+  | "mapping-status"
   | "classify"
   | "persist";
 
@@ -54,15 +56,18 @@ type CachedMapping = {
   encoding: CsvEncoding | null;
 };
 
+/**
+ * mapping 단계는 CSV 를 읽는 단계가 아니라 Claude 를 부르는 단계다. 그 실패를
+ * `parse_failed` 로 적으면 화면이 "CSV 파일을 읽지 못했습니다" 라고 말해 멀쩡한
+ * 파일을 의심하게 만든다. Claude 실패는 어느 단계에서 나든 분석 실패다.
+ */
 function errorCode(error: unknown, stage: Stage, expired: boolean): ErrorCode {
   if (expired && stage === "load") return "expired";
   if (error instanceof RowLimitExceeded) return "too_large";
-  if (stage === "load" || stage === "parse" || stage === "mapping") {
-    return "parse_failed";
+  if (error instanceof ClaudeCallError) {
+    return error.kind === "upstream" ? "upstream" : "analysis_failed";
   }
-  if (error instanceof ClaudeCallError && error.kind !== "upstream") {
-    return "analysis_failed";
-  }
+  if (stage === "load" || stage === "parse") return "parse_failed";
   return "upstream";
 }
 
@@ -72,6 +77,18 @@ function llmKind(error: unknown): ClaudeCallErrorKind | undefined {
 
 function upstreamDetailOf(error: unknown): UpstreamDetail | null {
   return error instanceof ClaudeCallError ? error.detail : null;
+}
+
+function responseShapeOf(error: unknown): ResponseShape | null {
+  return error instanceof ClaudeCallError ? error.shape : null;
+}
+
+/**
+ * JSON 이 아닌 응답의 형태. `json_parse` 만으로는 코드 펜스인지 설명문인지 빈
+ * 응답인지 구분할 수 없어 다음 실패를 기다리는 것 말고 할 수 있는 게 없다.
+ */
+function responseShapeDiagnosis(error: unknown): Record<string, unknown> {
+  return { ...responseShapeOf(error) };
 }
 
 /**
@@ -120,6 +137,22 @@ function errorDetailOf(error: unknown, stage: Stage): UploadErrorDetail {
       stage,
       errorName: errorNameOf(error),
       ...upstream,
+    };
+  }
+
+  // 응답 형태가 남아 있다는 건 Claude 가 답을 주긴 했다는 뜻이다. 이걸 놓치면
+  // 상류 detail 이 없다는 이유로 우리 쪽 코드 오류처럼 기록된다.
+  const shape = responseShapeOf(error);
+  if (shape) {
+    return {
+      source: "claude",
+      stage,
+      errorName: errorNameOf(error),
+      status: null,
+      errorType: null,
+      requestId: null,
+      retryable: false,
+      responseShape: shape,
     };
   }
 
@@ -256,7 +289,9 @@ export async function runAnalysis(
   uploadId: string,
 ): Promise<void> {
   let stage: Stage = "load";
-  let rowCount = 0;
+  // 0 은 "0행을 정규화했다" 는 측정값처럼 읽힌다. 정규화에 도달하지 못했으면
+  // 측정 자체가 없었다는 뜻이라 null 이어야 한다.
+  let rowCount: number | null = null;
   let expired = false;
 
   try {
@@ -279,7 +314,7 @@ export async function runAnalysis(
       headerRowIndex = cached.header_row_index;
       columnMap = cached.column_map;
     } else {
-      stage = "mapping";
+      stage = "mapping-columns";
       const mapped = await mapColumns(rows.slice(0, FINGERPRINT_ROWS));
       headerRowIndex = mapped.headerRowIndex;
       columnMap = mapped.columnMap;
@@ -291,13 +326,30 @@ export async function runAnalysis(
     const knownRules = columnMap.txnTypeRules ?? {};
     const newStatusValues = collectStatusValues(rows, columnMap, headerRowIndex)
       .filter((value) => !(value in knownRules));
+    let statusUnresolved = false;
     if (newStatusValues.length > 0) {
-      stage = "mapping";
-      columnMap = {
-        ...columnMap,
-        txnTypeRules: { ...knownRules, ...(await mapStatusValues(newStatusValues)) },
-      };
-      mappingChanged = true;
+      stage = "mapping-status";
+      const mapped = await mapStatusValues(newStatusValues);
+      statusUnresolved = mapped.unresolved > 0;
+      if (statusUnresolved) {
+        console.warn(
+          JSON.stringify({
+            event: "status_mapping_fallback",
+            uploadId,
+            unresolved: mapped.unresolved,
+            llmKind: mapped.failureKind,
+          }),
+        );
+      }
+      // 판정된 값만 캐시에 싣는다. 폴백한 normal 을 굳히면 이 양식의 이후 업로드가
+      // 조용히 오염되고, 재시도가 같은 값을 다시 물어볼 기회도 사라진다.
+      if (Object.keys(mapped.rules).length > 0) {
+        columnMap = {
+          ...columnMap,
+          txnTypeRules: { ...knownRules, ...mapped.rules },
+        };
+        mappingChanged = true;
+      }
     }
 
     if (mappingChanged) {
@@ -356,7 +408,7 @@ export async function runAnalysis(
     stage = "persist";
     await deleteTransactionsForUser(userId, uploadId);
     await insertTransactionsForUser(userId, uploadId, classified);
-    const summary = aggregate(classified, excluded);
+    const summary = aggregate(classified, excluded, statusUnresolved);
     const period = txnPeriod(classified);
     await updateUploadForUser(userId, uploadId, {
       status: "completed",
@@ -383,6 +435,7 @@ export async function runAnalysis(
         errorType: detail.errorType,
         ...(llmKind(error) ? { llmKind: llmKind(error) } : {}),
         ...upstreamDiagnosis(error),
+        ...responseShapeDiagnosis(error),
         ...classifyDiagnosis(error),
       }),
     );

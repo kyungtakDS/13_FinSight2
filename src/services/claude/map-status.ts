@@ -2,7 +2,11 @@ import { z } from "zod";
 
 import type { TxnTypeKind } from "@/types/csv";
 
-import { callStructured } from "./client";
+import {
+  callStructured,
+  ClaudeCallError,
+  type ClaudeCallErrorKind,
+} from "./client";
 
 const StatusRuleSchema = z.array(
   z.object({
@@ -32,28 +36,74 @@ void와 reversal의 차이는 원래 거래가 청구되었는지 여부다. 청
 `.trim();
 
 /**
- * 상태값 → 의미 사전을 만든다. 카드사별 문자열을 코드에 두지 않기 위해 판정을
- * 모델에 맡기고, 결과는 양식 단위로 캐시된다 (ADR-014).
+ * 실측으로 확인된 상태값. 카드사별 문자열을 코드에 두지 않는다는 ADR-014 의
+ * 원칙에서 이 표만 예외다 — 세 값 모두 국민카드 309행에서 대응 매입 행이 있는지
+ * 까지 확인했고, 판정이 틀리면 합계가 틀리는 값이라 모델 응답에 맡길 이유가 없다.
+ * 여기 없는 값은 지금까지처럼 모델이 판정한다.
+ */
+const SEED_RULES: Readonly<Record<string, TxnTypeKind>> = Object.freeze({
+  전표매입: "normal",
+  승인취소: "void",
+  취소전표매입: "reversal",
+});
+
+export interface StatusMapping {
+  /** 판정이 끝난 값만 담는다. 폴백한 값은 여기 없다. */
+  rules: Record<string, TxnTypeKind>;
+  /** 판정을 얻지 못해 normal 로 흘려보낸 값의 수. */
+  unresolved: number;
+  /** 폴백을 유발한 실패 종류. 값·원문은 담지 않는다. */
+  failureKind: ClaudeCallErrorKind | null;
+}
+
+/**
+ * 상태값 → 의미 사전을 만든다. 시드에 없는 값만 모델에 묻고, 결과는 양식 단위로
+ * 캐시된다 (ADR-014).
  *
- * 입력에 없는 값은 버리고 모델이 빠뜨린 값은 normal 로 채운다 — 사전의 키 집합이
- * 언제나 물어본 값 집합과 같아야 캐시 적중 여부를 값 목록만으로 판단할 수 있다.
+ * 모델이 빠뜨린 값은 normal 로 채운다 — 사전의 키 집합이 물어본 값 집합과 같아야
+ * 캐시 적중 여부를 값 목록만으로 판단할 수 있다. 반대로 호출이 실패하면 그 값들을
+ * 채우지 않고 `unresolved` 로 알린다. 채우지 않는 것이 곧 폴백이다: normalize 는
+ * 사전에 없는 값을 normal 로 읽으므로 분석은 계속되고, 캐시에는 들어가지 않아
+ * 다음 재시도가 같은 값을 다시 묻는다.
  */
 export async function mapStatusValues(
   values: string[],
-): Promise<Record<string, TxnTypeKind>> {
-  if (values.length === 0) {
-    return {};
+): Promise<StatusMapping> {
+  const seeded = Object.fromEntries(
+    values
+      .filter((value) => Object.hasOwn(SEED_RULES, value))
+      .map((value) => [value, SEED_RULES[value]!]),
+  );
+  const unknown = values.filter((value) => !Object.hasOwn(SEED_RULES, value));
+
+  if (unknown.length === 0) {
+    return { rules: seeded, unresolved: 0, failureKind: null };
   }
 
-  const result = await callStructured({
-    system: SYSTEM_PROMPT,
-    userData: JSON.stringify(values),
-    schema: StatusRuleSchema,
-    maxTokens: 1_000,
-  });
+  let result;
+  try {
+    result = await callStructured({
+      system: SYSTEM_PROMPT,
+      userData: JSON.stringify(unknown),
+      schema: StatusRuleSchema,
+      maxTokens: 1_000,
+    });
+  } catch (error) {
+    if (!(error instanceof ClaudeCallError)) {
+      throw error;
+    }
+    return { rules: seeded, unresolved: unknown.length, failureKind: error.kind };
+  }
 
   const judged = new Map(result.map(({ value, kind }) => [value, kind]));
-  return Object.fromEntries(
-    values.map((value) => [value, judged.get(value) ?? "normal"]),
-  );
+  return {
+    rules: {
+      ...seeded,
+      ...Object.fromEntries(
+        unknown.map((value) => [value, judged.get(value) ?? "normal"]),
+      ),
+    },
+    unresolved: 0,
+    failureKind: null,
+  };
 }

@@ -152,6 +152,36 @@ describe("aggregate", () => {
     expect(`${voided.title} ${voided.body}`).not.toMatch(/merchant-|100/);
   });
 
+  // 취소 판정에 실패하면 취소 건이 정상 거래로 합계에 들어간다. 과대계상은
+  // 누락보다 위험하므로 조용히 넘어가지 않는다 (ADR-014).
+  it("warns when a status verdict could not be resolved", () => {
+    const warning = aggregate([txn(1, 100)], 0, true).insights.find(
+      ({ id }) => id === "status-unresolved",
+    );
+    expect(warning?.body).toContain("정상 거래로 포함했을 수 있습니다");
+  });
+
+  it("puts the status warning in the top three", () => {
+    const insights = aggregate([txn(1, 100), txn(2, 20, "uncertain", null)], 0, true).insights;
+    expect(insights.slice(0, 3).some(({ id }) => id === "status-unresolved")).toBe(true);
+  });
+
+  it("omits the status warning when every status was resolved", () => {
+    expect(
+      aggregate([txn(1, 100)], 0, false).insights.some(({ id }) => id === "status-unresolved"),
+    ).toBe(false);
+    expect(
+      aggregate([txn(1, 100)]).insights.some(({ id }) => id === "status-unresolved"),
+    ).toBe(false);
+  });
+
+  it("puts no status value or merchant in the status warning", () => {
+    const warning = aggregate([txn(1, 100)], 0, true).insights.find(
+      ({ id }) => id === "status-unresolved",
+    )!;
+    expect(`${warning.title} ${warning.body}`).not.toMatch(/merchant-|전표매입|승인취소|100/u);
+  });
+
   it("returns no insights for no data", () => {
     expect(aggregate([]).insights).toEqual([]);
   });
