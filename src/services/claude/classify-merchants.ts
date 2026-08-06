@@ -10,6 +10,7 @@ import {
   callStructured,
   ClaudeCallError,
   type ClaudeCallErrorKind,
+  type UpstreamDetail,
 } from "./client";
 
 export interface MerchantVerdict {
@@ -25,7 +26,47 @@ export interface MerchantVerdict {
  */
 export const CLASSIFY_BATCH_SIZE = 40;
 
+/**
+ * 배치 하나가 시도하는 총 횟수. 상류 과부하는 스트림 중간에 도착해 SDK 의 자동
+ * 재시도가 닿지 않는다 — 그 자리에서 배치가 통째로 죽는다.
+ *
+ * 최악 시간: 배치당 3회 시도 × SDK 2회 = 6회 호출, 백오프는 최대 1+2 = 3초.
+ * 실패로 끝나는 실행은 첫 번째로 소진된 배치에서 중단되므로 재시도 비용이
+ * 배치 수만큼 곱해지지 않는다.
+ */
+export const CLASSIFY_MAX_ATTEMPTS = 3;
+
+const RETRY_BASE_DELAY_MS = 1_000;
+
 const MAX_REASON_LENGTH = 500;
+
+/**
+ * 지수 백오프 + jitter. attempt 는 1-based 로 방금 실패한 시도 번호다.
+ * 1회차 500~1000ms, 2회차 1000~2000ms — jitter 가 없으면 같은 순간에 죽은
+ * 요청들이 같은 순간에 되돌아와 과부하를 그대로 재현한다.
+ */
+export function retryDelayMs(
+  attempt: number,
+  random: number = Math.random(),
+): number {
+  const ceiling = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+  return Math.round(ceiling / 2 + (ceiling / 2) * random);
+}
+
+const realSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 재시도해 볼 값어치가 있는 상류 실패의 진단 정보. 응답 형태 문제(schema ·
+ * json_parse)와 거부는 detail 이 없으므로 여기서 걸러진다 — 다시 걸어도 같은
+ * 답이 온다.
+ */
+function retryableDetail(error: unknown): UpstreamDetail | null {
+  if (!(error instanceof ClaudeCallError) || !error.detail?.retryable) {
+    return null;
+  }
+  return error.detail;
+}
 
 /**
  * 배치가 만들어 낼 JSON 분량에 맞춘 출력 예산. 고정 12k 를 요구하면 실제로 쓰지도
@@ -188,7 +229,7 @@ function validateBatch(
   return parsed.data;
 }
 
-async function classifyBatch(
+async function classifyBatchOnce(
   names: string[],
   batchNumber: number,
 ): Promise<MerchantVerdict[]> {
@@ -223,6 +264,55 @@ async function classifyBatch(
   return validated.map(normalizeVerdict);
 }
 
+/**
+ * 재시도 한 번을 기록한다. 상호명·응답 본문·예외 메시지는 담지 않는다 — 어느
+ * 배치가 몇 번째 시도에서 어떤 유형으로 죽었는지까지만 남긴다.
+ */
+function logRetry(
+  batchIndex: number,
+  attempt: number,
+  detail: UpstreamDetail,
+  delayMs: number,
+): void {
+  console.warn(
+    JSON.stringify({
+      event: "classify_batch_retry",
+      batchIndex,
+      attempt,
+      maxAttempts: CLASSIFY_MAX_ATTEMPTS,
+      errorType: detail.errorType,
+      status: detail.status,
+      requestId: detail.requestId,
+      delayMs,
+    }),
+  );
+}
+
+/**
+ * 죽은 배치 하나만 다시 건다. 앞 배치까지 되돌리면 배치별 부분 저장으로 아낀
+ * 비용이 그대로 돌아온다. 마지막 시도까지 실패하면 그 오류를 그대로 던져
+ * 상위가 기록하는 detail 이 마지막 실패의 것이 되게 한다.
+ */
+async function classifyBatch(
+  names: string[],
+  batchNumber: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<MerchantVerdict[]> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await classifyBatchOnce(names, batchNumber);
+    } catch (error) {
+      const detail = retryableDetail(error);
+      if (!detail || attempt >= CLASSIFY_MAX_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = retryDelayMs(attempt);
+      logRetry(batchNumber, attempt, detail, delayMs);
+      await sleep(delayMs);
+    }
+  }
+}
+
 export interface ClassifyBatchResult {
   names: string[];
   verdicts: MerchantVerdict[];
@@ -234,6 +324,8 @@ export interface ClassifyOptions {
    * 즉시 보존해, 재시도가 처음부터 다시 돌지 않게 하기 위한 훅이다.
    */
   onBatchComplete?: (batch: ClassifyBatchResult) => Promise<void> | void;
+  /** 재시도 사이의 대기. 테스트가 실제로 기다리지 않도록 주입한다. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** 입력 배열과 같은 길이·같은 순서의 배열을 반환한다. */
@@ -262,6 +354,7 @@ export async function classifyMerchants(
     inputUniqueIndexes.push(uniqueIndex);
   }
 
+  const sleep = options.sleep ?? realSleep;
   const uniqueVerdicts: MerchantVerdict[] = [];
   for (
     let offset = 0;
@@ -270,7 +363,7 @@ export async function classifyMerchants(
   ) {
     const batch = uniqueNames.slice(offset, offset + CLASSIFY_BATCH_SIZE);
     const batchNumber = offset / CLASSIFY_BATCH_SIZE + 1;
-    const batchVerdicts = await classifyBatch(batch, batchNumber);
+    const batchVerdicts = await classifyBatch(batch, batchNumber, sleep);
     uniqueVerdicts.push(...batchVerdicts);
     await options.onBatchComplete?.({ names: batch, verdicts: batchVerdicts });
   }

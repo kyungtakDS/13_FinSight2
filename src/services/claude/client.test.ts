@@ -20,6 +20,7 @@ import {
   ClaudeCallError,
   CLAUDE_MAX_RETRIES,
   getAnthropic,
+  isRetryableErrorType,
   isRetryableStatus,
 } from "./client";
 
@@ -339,10 +340,14 @@ describe("Claude client", () => {
     expect(error).toMatchObject({ kind: "json_parse", detail: null });
   });
 
-  it("configures the SDK to retry transient failures with backoff", () => {
+  // SDK 재시도와 배치 재시도는 곱해진다. 배치가 3회 시도하므로 SDK 를 2 로 두면
+  // 배치 하나가 최악 9 회 호출이 되어 maxDuration 300초 안에 들어온다고 볼 수 없다.
+  // 1 이면 6 회다 — mapColumns 처럼 배치 재시도가 없는 호출자를 위해 0 은 아니다.
+  it("keeps the SDK retry count low enough not to multiply with batch retries", () => {
     getAnthropic();
 
     expect(CLAUDE_MAX_RETRIES).toBeGreaterThan(0);
+    expect(CLAUDE_MAX_RETRIES).toBeLessThanOrEqual(1);
     expect(anthropicMock.constructor).toHaveBeenCalledWith(
       expect.objectContaining({ maxRetries: CLAUDE_MAX_RETRIES }),
     );
@@ -355,6 +360,102 @@ describe("Claude client", () => {
     for (const status of [400, 401, 403, 404, 422, null]) {
       expect(isRetryableStatus(status)).toBe(false);
     }
+  });
+
+  it("classifies exactly the retryable upstream error types", () => {
+    for (const errorType of ["overloaded_error", "rate_limit_error"]) {
+      expect(isRetryableErrorType(errorType)).toBe(true);
+    }
+    for (const errorType of [
+      "authentication_error",
+      "permission_error",
+      "invalid_request_error",
+      "not_found_error",
+      "APIConnectionError",
+      null,
+    ]) {
+      expect(isRetryableErrorType(errorType)).toBe(false);
+    }
+  });
+
+  // 스트리밍이 시작된 뒤 중간에 도착하는 상류 오류는 HTTP status 없이 온다.
+  // status 만 보면 재시도 가능한 과부하를 영구 실패로 기록한다 — 프로덕션에서
+  // 309행 업로드가 정확히 이 경로로 죽었다(status: null · overloaded_error).
+  it("marks a status-less overloaded_error as retryable", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Overloaded"), {
+        request_id: "req_011Cdjf",
+        error: { type: "error", error: { type: "overloaded_error" } },
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      kind: "upstream",
+      detail: {
+        status: null,
+        errorType: "overloaded_error",
+        requestId: "req_011Cdjf",
+        retryable: true,
+      },
+    });
+  });
+
+  it("marks a status-less rate_limit_error as retryable", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("slow down"), {
+        request_id: "req_ratelimit",
+        error: { type: "error", error: { type: "rate_limit_error" } },
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      detail: {
+        status: null,
+        errorType: "rate_limit_error",
+        requestId: "req_ratelimit",
+        retryable: true,
+      },
+    });
+  });
+
+  // 재시도해 봐야 같은 답이 오는 실패들. 유형 판정이 status 판정을 넓히기만 하고
+  // 이쪽까지 열어 주면 안 된다.
+  it.each([
+    "authentication_error",
+    "permission_error",
+    "invalid_request_error",
+  ])("keeps a status-less %s non-retryable", async (errorType) => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("rejected"), {
+        error: { type: "error", error: { type: errorType } },
+      });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      detail: { status: null, errorType, retryable: false },
+    });
+  });
+
+  // 유형 판정을 더해도 status 판정은 그대로여야 한다 — 429 는 본문에 유형이
+  // 실려 오지 않아도 재시도 대상이다.
+  it("still trusts the status when the body carries no error type", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      const failure = new Error("too many requests");
+      failure.name = "APIError";
+      throw Object.assign(failure, { status: 429 });
+    });
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      detail: { status: 429, errorType: "APIError", retryable: true },
+    });
   });
 
   it("never calls console methods", async () => {
