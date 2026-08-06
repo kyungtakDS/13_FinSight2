@@ -199,3 +199,69 @@ describe("mapColumns", () => {
     expect((error as Error).message).not.toContain(privateCell);
   });
 });
+
+/**
+ * 금액으로 읽히는 컬럼이 여러 개인 양식이 있다 — 청구액 옆에 적립·할인·잔액·
+ * 수수료가 나란히 놓인다. 그중 차감 전용 컬럼이 amount 로 뽑히면 전 거래가
+ * 음수가 되어 합계가 조용히 뒤집힌다. 카드사 이름이 아니라 값의 성질로 거른다.
+ */
+describe("mapColumns amount column guard", () => {
+  const deductionRows = [
+    ["이용일", "이용가맹점", "이용금액", "예상적립/할인"],
+    ["2026년 06월 29일", "합성가맹점A", "10,000", "-70"],
+    ["2026년 06월 01일", "합성가맹점B", "20,000", "-140"],
+    ["2026년 4월 14일", "합성가맹점C", "0", "0"],
+  ];
+
+  beforeEach(() => {
+    clientMock.callStructured.mockReset();
+  });
+
+  it("rejects an amount column that never holds a positive value", async () => {
+    clientMock.callStructured.mockResolvedValue({
+      headerRowIndex: 0,
+      columnMap: { date: 0, merchant: 1, amount: 3, txnType: null },
+    });
+
+    await expect(mapColumns(deductionRows)).rejects.toMatchObject({ kind: "schema" });
+  });
+
+  it("accepts the charge column standing next to the deduction column", async () => {
+    clientMock.callStructured.mockResolvedValue({
+      headerRowIndex: 0,
+      columnMap: { date: 0, merchant: 1, amount: 2, txnType: null },
+    });
+
+    await expect(mapColumns(deductionRows)).resolves.toMatchObject({
+      columnMap: { amount: 2 },
+    });
+  });
+
+  // 표본에 읽을 금액이 하나도 없으면 판단 근거도 없다. 근거 없이 거절하면
+  // 멀쩡한 양식이 막힌다.
+  it("does not reject a sample that holds no readable amount at all", async () => {
+    const noAmounts = [
+      ["이용일", "이용가맹점", "이용금액"],
+      ["2026년 06월 29일", "합성가맹점A", ""],
+    ];
+    clientMock.callStructured.mockResolvedValue({
+      headerRowIndex: 0,
+      columnMap: { date: 0, merchant: 1, amount: 2, txnType: null },
+    });
+
+    await expect(mapColumns(noAmounts)).resolves.toMatchObject({
+      columnMap: { amount: 2 },
+    });
+  });
+
+  it("does not leak the rejected column content in the error", async () => {
+    clientMock.callStructured.mockResolvedValue({
+      headerRowIndex: 0,
+      columnMap: { date: 0, merchant: 1, amount: 3, txnType: null },
+    });
+
+    const error = await mapColumns(deductionRows).catch((caught: unknown) => caught);
+
+    expect(String((error as Error).message)).not.toContain("합성가맹점A");
+  });
+});

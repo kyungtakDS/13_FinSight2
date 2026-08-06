@@ -1,5 +1,7 @@
 export const ERROR_CODES = Object.freeze([
   "parse_failed",
+  /** 파일은 읽혔지만 거래로 해석된 행이 하나도 없다. `parse_failed` 와 다르다. */
+  "rows_unreadable",
   "too_large",
   "duplicate_file",
   "analysis_failed",

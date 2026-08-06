@@ -108,9 +108,47 @@ describe("parseTxnDate", () => {
     expect(parseTxnDate(raw)).toBe("2025-03-14");
   });
 
+  // 현대카드는 `2026년 06월 29일` 형식이라 구분자가 년/월/일이다. 이걸 못 읽어
+  // 전 행이 skip 되고 거래 0건짜리 리포트가 만들어졌다 (#29).
+  it.each([
+    ["2026년 06월 29일", "2026-06-29"],
+    ["2026년 6월 5일", "2026-06-05"],
+    ["2026년 12월 31일", "2026-12-31"],
+    ["  2026년 06월 29일  ", "2026-06-29"],
+    ["2026년 06월 29일 13:22", "2026-06-29"],
+  ])("normalizes the Korean-separator form %s", (raw, expected) => {
+    expect(parseTxnDate(raw)).toBe(expected);
+  });
+
+  it.each([
+    ["2026-07-31", "2026-07-31"],
+    ["2026.06.13", "2026-06-13"],
+    ["2026/06/13", "2026-06-13"],
+    ["20260629", "2026-06-29"],
+    ["2026-07-31 12:34:56", "2026-07-31"],
+    ["  2026.06.13  ", "2026-06-13"],
+  ])("keeps the existing form %s working", (raw, expected) => {
+    expect(parseTxnDate(raw)).toBe(expected);
+  });
+
+  it("zero-pads a single digit month and day", () => {
+    expect(parseTxnDate("2026년 4월 7일")).toBe("2026-04-07");
+  });
+
+  // 한 자리 월·일을 허용하면 구분자 없는 6자리 숫자가 날짜로 읽힐 위험이 생긴다.
+  // 구분자가 없을 때는 8자리만 날짜다.
+  it.each(["202612", "2026", "20261", "2026061", "202606291"])(
+    "rejects the separator-less %s that is not eight digits",
+    (raw) => {
+      expect(parseTxnDate(raw)).toBeNull();
+    },
+  );
+
   it("returns null for an invalid date", () => {
     expect(parseTxnDate("2025-02-30")).toBeNull();
     expect(parseTxnDate("날짜 없음")).toBeNull();
+    expect(parseTxnDate("2026년 13월 01일")).toBeNull();
+    expect(parseTxnDate("2026년 02월 30일")).toBeNull();
   });
 });
 
@@ -457,5 +495,64 @@ describe("국민카드4.csv 실측 회귀", () => {
     );
 
     expect(voided?.title).toContain("16");
+  });
+});
+
+// 현대카드 양식의 구조만 재현한 합성 픽스처다. 실제 명세서의 가맹점명·금액은
+// 담지 않는다 (ADR-005). 재현하는 것은 10개 컬럼 배치와 `YYYY년 MM월 DD일`
+// 날짜 표기, 그리고 금액으로 읽히는 컬럼이 여섯 개라는 점뿐이다.
+const koreanDateRows = [
+  ["이용일", "이용카드", "이용가맹점", "이용금액", "할부/회차", "적립/할인율(%)", "예상적립/할인", "결제원금", "결제후잔액", "수수료(이자)"],
+  ["2026년 06월 29일", "합성카드", "합성가맹점A", "10,000", "", "0.7%", "-70", "9,930", "0", "0"],
+  ["2026년 06월 01일", "합성카드", "합성가맹점B", "20,000", "", "0.70%", "-140", "19,860", "0", "0"],
+  ["2026년 06월 05일", "합성카드", "합성가맹점C", "30,000", "", "0.70%", "-210", "29,790", "0", "0"],
+  ["2026년 5월 1일", "합성카드", "합성가맹점D", "40,000", "", "0.70%", "-280", "39,720", "0", "0"],
+  ["2026년 4월 14일", "합성카드", "합성가맹점E", "0", "", "0%", "0", "0", "0", "5,000"],
+];
+const koreanDateMap: ColumnMap = { date: 0, merchant: 2, amount: 3, txnType: null };
+
+describe("normalizeRows on a Korean-date ten-column format", () => {
+  it("parses every one of the five date rows", () => {
+    const result = normalizeRows(koreanDateRows, koreanDateMap, 0);
+
+    expect(result.txns).toHaveLength(5);
+    expect(result.skipped).toBe(0);
+    expect(result.txns.map(({ txnDate }) => txnDate)).toEqual([
+      "2026-06-29",
+      "2026-06-01",
+      "2026-06-05",
+      "2026-05-01",
+      "2026-04-14",
+    ]);
+  });
+
+  it("takes the merchant from the 이용가맹점 column", () => {
+    expect(
+      normalizeRows(koreanDateRows, koreanDateMap, 0).txns.map(({ merchant }) => merchant),
+    ).toEqual([
+      "합성가맹점A",
+      "합성가맹점B",
+      "합성가맹점C",
+      "합성가맹점D",
+      "합성가맹점E",
+    ]);
+  });
+
+  it("takes the amount from the 이용금액 column, not the discount column", () => {
+    expect(
+      normalizeRows(koreanDateRows, koreanDateMap, 0).txns.map(({ amount }) => amount),
+    ).toEqual([10_000, 20_000, 30_000, 40_000, 0]);
+  });
+
+  // 이 컬럼이 amount 로 뽑히면 전 거래가 음수가 된다. mapColumns 가 그걸 거르는
+  // 근거가 되는 성질을 여기서 고정해 둔다.
+  it("has a discount column whose every value is at or below zero", () => {
+    const discounts = koreanDateRows
+      .slice(1)
+      .map((row) => parseAmount(row[6]!))
+      .filter((value): value is number => value !== null);
+
+    expect(discounts).toHaveLength(5);
+    expect(discounts.every((value) => value <= 0)).toBe(true);
   });
 });

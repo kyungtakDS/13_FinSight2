@@ -92,8 +92,15 @@ describe("Dropzone", () => {
     expect(await screen.findByText(ERROR_MESSAGES.upstream)).toBeInTheDocument();
     expect(screen.queryByText("SQL secret")).not.toBeInTheDocument();
     expect(Object.keys(ERROR_MESSAGES)).toEqual([
-      "parse_failed", "too_large", "duplicate_file", "analysis_failed",
+      "parse_failed", "rows_unreadable", "too_large", "duplicate_file", "analysis_failed",
       "upstream", "expired", "payment_required",
     ]);
+  });
+
+  // 파일은 정상적으로 읽혔고 행을 해석하지 못한 것이다. "CSV 파일을 읽지
+  // 못했습니다" 라고 말하면 멀쩡한 파일을 의심하게 만든다 (#29).
+  it("tells the user the rows were unreadable, not the file", () => {
+    expect(ERROR_MESSAGES.rows_unreadable).toContain("거래 날짜");
+    expect(ERROR_MESSAGES.rows_unreadable).not.toContain("CSV 파일을 읽지 못했습니다");
   });
 });

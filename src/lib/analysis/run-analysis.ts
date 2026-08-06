@@ -12,6 +12,7 @@ import {
   normalizeRows,
   parseRows,
   RowLimitExceeded,
+  RowsUnreadable,
   type CsvEncoding,
 } from "@/lib/csv/normalize";
 import { aggregate, txnPeriod } from "@/lib/report/aggregate";
@@ -64,6 +65,7 @@ type CachedMapping = {
 function errorCode(error: unknown, stage: Stage, expired: boolean): ErrorCode {
   if (expired && stage === "load") return "expired";
   if (error instanceof RowLimitExceeded) return "too_large";
+  if (error instanceof RowsUnreadable) return "rows_unreadable";
   if (error instanceof ClaudeCallError) {
     return error.kind === "upstream" ? "upstream" : "analysis_failed";
   }
@@ -358,8 +360,26 @@ export async function runAnalysis(
     }
 
     stage = "parse";
-    const { txns: normalized, excluded } = normalizeRows(rows, columnMap, headerRowIndex);
+    const { txns: normalized, skipped, excluded } = normalizeRows(rows, columnMap, headerRowIndex);
     rowCount = normalized.length;
+    // 세 갈래가 데이터 행을 정확히 나눠 가진다 — 읽었거나, 제외했거나, 못 읽었거나.
+    const inputRows = normalized.length + skipped + excluded;
+    if (skipped > 0) {
+      console.info(
+        JSON.stringify({
+          event: "normalize_rows",
+          uploadId,
+          inputRows,
+          normalized: normalized.length,
+          skipped,
+        }),
+      );
+    }
+    // 전부 못 읽었는데 completed 로 저장하면 사용자가 "경비 0원" 이라는 틀린
+    // 결론을 성공 화면에서 읽는다. 실패로 남겨야 원인을 찾을 수 있다.
+    if (inputRows > 0 && normalized.length === 0) {
+      throw new RowsUnreadable();
+    }
     stage = "classify";
     const keys = [...new Set(normalized.map((txn) => merchantKey(txn.merchant)))];
     const entries = await lookupMerchants(keys);
@@ -408,7 +428,7 @@ export async function runAnalysis(
     stage = "persist";
     await deleteTransactionsForUser(userId, uploadId);
     await insertTransactionsForUser(userId, uploadId, classified);
-    const summary = aggregate(classified, excluded, statusUnresolved);
+    const summary = aggregate(classified, excluded, statusUnresolved, skipped);
     const period = txnPeriod(classified);
     await updateUploadForUser(userId, uploadId, {
       status: "completed",
