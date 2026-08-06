@@ -217,6 +217,7 @@ webhook_events(event_id text pk, event_type text not null,
 - 모델 `claude-opus-5`, `effort: medium` 고정. Opus 5는 thinking 기본 on
 - `content`에 접근하기 **전에** `stop_reason`을 검사한다. `refusal`·`max_tokens`·`model_context_window_exceeded`를 로그에서 구분해 남긴다. **잘린 JSON을 zod에 넘겨 스키마 오류로 오인하지 마라** — 원인이 다르면 고치는 곳도 다르다 (클라이언트에는 셋 다 `analysis_failed`로 나간다)
 - 스트리밍 + `finalMessage()`. system 프롬프트 캐싱(최소 512토큰)
+- **구조화 응답은 공통 client 계층에서 JSON 경계를 정규화한 뒤 검증한다.** 출력 형식은 `output_config.format`으로 API에 실어 강제하되, 타입 없는 필드가 있어 형식으로 변환되지 않는 스키마(`classifyMerchants`)에서는 형식 없이 호출한다. 어느 경로든 응답에서 JSON 값의 **경계를 찾아** 읽으므로 코드 펜스·설명문·공백은 호출부에 도달하지 않는다. 문자열 치환으로 펜스를 벗기지 마라 — JSON 문자열 안의 괄호와 진짜 경계를 구분하지 못한다. 값이 둘 이상이면 첫 번째를 고르지 말고 실패시킨다 (assistant prefill은 Opus 5에서 400이라 쓸 수 없다)
 - **계정과목은 프롬프트에 고정 목록으로 박는다.** 모델이 과목명을 지어내면 집계가 무너진다
 - 모델이 업종을 특정하지 못하면 **추측하지 말고 `uncertain`을 반환하도록** 프롬프트에 명시한다. 세무 맥락에서 그럴듯한 오분류는 무응답보다 나쁘다
 - **모델 출력 배열과 입력 상호명 배열의 인덱스·길이 정합성을 검사한다.** 어긋나면 실패시킨다 — 어긋난 채 조인하면 엉뚱한 거래에 엉뚱한 과목이 붙는다

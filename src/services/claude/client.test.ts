@@ -49,6 +49,22 @@ async function invoke(userData = "sensitive merchant") {
   });
 }
 
+/** 배열을 돌려주는 호출자(mapStatusValues·classifyMerchants)의 형태다. */
+const arraySchema = z.array(z.object({ value: z.string() }));
+
+async function invokeArray(userData = "sensitive merchant") {
+  return callStructured({
+    system: "Return a JSON array matching the supplied schema.",
+    userData,
+    schema: arraySchema,
+    maxTokens: 256,
+  });
+}
+
+function replyWith(text: string) {
+  anthropicMock.finalMessage.mockResolvedValue(message("end_turn", text));
+}
+
 describe("Claude client", () => {
   const originalApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -570,5 +586,316 @@ describe("Claude client", () => {
 
     expect(error).toBeInstanceOf(ClaudeCallError);
     expect((error as Error).message).not.toContain(userData);
+  });
+});
+
+// 프롬프트로 "코드 펜스를 쓰지 마라"라고 부탁하는 것만으로는 형식이 강제되지
+// 않는다. 코드 펜스 한 번에 업로드 전체가 죽었으므로(#33) 응답에서 JSON 경계를
+// 찾아 읽는다. 문자열 치환이 아니라 경계 스캔인 이유는 JSON 문자열 안의 중괄호와
+// 중첩 구조를 치환으로는 구분할 수 없기 때문이다.
+describe("callStructured JSON 경계 추출", () => {
+  const originalApiKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-api-key";
+    anthropicMock.constructor.mockClear();
+    anthropicMock.stream.mockClear();
+    anthropicMock.finalMessage.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalApiKey;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("reads a bare JSON object", async () => {
+    replyWith('{"value":"ok"}');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads a bare JSON array", async () => {
+    replyWith('[{"value":"ok"}]');
+
+    await expect(invokeArray()).resolves.toEqual([{ value: "ok" }]);
+  });
+
+  it("reads an object wrapped in a ```json fence", async () => {
+    replyWith('```json\n{"value":"ok"}\n```');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads an array wrapped in a bare ``` fence", async () => {
+    replyWith('```\n[{"value":"ok"}]\n```');
+
+    await expect(invokeArray()).resolves.toEqual([{ value: "ok" }]);
+  });
+
+  // 언어 표기의 대소문자·공백은 모델이 매번 다르게 쓴다. 경계 스캔은 펜스를
+  // 문자열로 벗기지 않으므로 이 변형들을 따로 처리할 필요가 없다.
+  it.each([
+    "```JSON\n{\"value\":\"ok\"}\n```",
+    "```Json\n{\"value\":\"ok\"}\n```",
+    "``` json\n{\"value\":\"ok\"}\n```",
+    "```json   \n{\"value\":\"ok\"}\n```",
+    "~~~json\n{\"value\":\"ok\"}\n~~~",
+  ])("reads through fence variant %#", async (text) => {
+    replyWith(text);
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads JSON padded with whitespace and newlines", async () => {
+    replyWith('\n\n   {"value":"ok"}   \n\t\n');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads JSON that follows a prose preamble", async () => {
+    replyWith('요청하신 결과입니다:\n{"value":"ok"}');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads JSON that precedes a prose postamble", async () => {
+    replyWith('{"value":"ok"}\n\n위와 같이 판정했습니다.');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  it("reads JSON wrapped in prose on both sides", async () => {
+    replyWith('결과는 다음과 같습니다.\n```json\n{"value":"ok"}\n```\n확인해 주세요.');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  // 경계 스캔이 문자열 안의 중괄호를 경계로 착각하면 멀쩡한 응답이 잘린다.
+  it("does not treat braces inside a JSON string as a boundary", async () => {
+    replyWith('{"value":"a{b}c[d]e"}');
+
+    await expect(invoke()).resolves.toEqual({ value: "a{b}c[d]e" });
+  });
+
+  it("does not treat an escaped quote as the end of a string", async () => {
+    replyWith('{"value":"he said \\"}\\" loudly"}');
+
+    await expect(invoke()).resolves.toEqual({ value: 'he said "}" loudly' });
+  });
+
+  it("reads nested objects and arrays whole", async () => {
+    const nested = z.object({ outer: z.object({ inner: z.array(z.number()) }) });
+    replyWith('설명\n{"outer":{"inner":[1,2,3]}}\n끝');
+
+    await expect(
+      callStructured({ system: "s", userData: "u", schema: nested, maxTokens: 256 }),
+    ).resolves.toEqual({ outer: { inner: [1, 2, 3] } });
+  });
+
+  // 덩어리가 여럿이면 어느 쪽이 답인지 알 수 없다. 조용히 첫 번째를 고르면
+  // 사용자는 틀린 결과를 성공 화면에서 읽는다.
+  it("fails instead of silently taking the first of several JSON values", async () => {
+    replyWith('{"value":"first"}\n\n{"value":"second"}');
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ClaudeCallError);
+    expect(error).toMatchObject({ kind: "json_parse" });
+  });
+
+  it("fails when two fenced blocks are returned", async () => {
+    replyWith('```json\n{"value":"a"}\n```\n또는\n```json\n{"value":"b"}\n```');
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "json_parse" });
+  });
+
+  // 괄호 짝은 맞지만 JSON 이 아닌 산문은 후보로 세면 안 된다.
+  it("ignores bracketed prose that is not valid JSON", async () => {
+    replyWith('참고[표 1] 결과입니다:\n{"value":"ok"}\n출처[부록] 참조');
+
+    await expect(invoke()).resolves.toEqual({ value: "ok" });
+  });
+
+  // 알려진 한계이자 의도한 선택이다. `[1]` 은 산문 속 각주로 보이지만 문법적으로는
+  // 유효한 JSON 배열이라 후보가 둘이 된다. 여기서 "산문처럼 생겼으니 버린다"는
+  // 추측을 넣으면 진짜 답을 버릴 수도 있다 — 애매하면 실패시킨다. 실패는 재시도로
+  // 회복되지만, 조용히 고른 틀린 값은 세무 자료에 그대로 남는다.
+  it("fails rather than guessing when prose contains a second parseable value", async () => {
+    replyWith('참고[1] 결과입니다:\n{"value":"ok"}');
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "json_parse" });
+  });
+
+  it("reports empty text as json_parse", async () => {
+    replyWith("");
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "json_parse" });
+  });
+
+  it("reports whitespace-only text as json_parse", async () => {
+    replyWith("   \n\t  ");
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "json_parse" });
+  });
+
+  it("reports truncated JSON as json_parse, not schema", async () => {
+    replyWith('{"value":');
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "json_parse" });
+    expect(error).not.toMatchObject({ kind: "schema" });
+  });
+
+  it("reports a truncated fenced block as json_parse", async () => {
+    replyWith('```json\n{"value":"ok"');
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "json_parse" });
+  });
+
+  // 형식 노이즈를 걷어낸 뒤에도 형태가 다르면 그건 스키마 문제다 — 고치는 곳이
+  // 프롬프트가 아니라 스키마이므로 코드를 나눠 둔다.
+  it("reports recovered-but-mismatched JSON as schema", async () => {
+    replyWith('```json\n{"wrong":true}\n```');
+
+    const error = await invoke().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ kind: "schema" });
+    expect(error).not.toMatchObject({ kind: "json_parse" });
+  });
+
+  it("keeps the recovered response text out of the error and the console", async () => {
+    const userData = "강남스타카페 2026-01-02 12,000원";
+    const spies = [
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+      vi.spyOn(console, "info").mockImplementation(() => undefined),
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+    ];
+    replyWith(`\`\`\`json\n{"merchant":"${userData}"}\n\`\`\``);
+
+    const error = await invoke(userData).catch((caught: unknown) => caught);
+    const serialized = JSON.stringify({
+      detail: (error as ClaudeCallError).detail,
+      shape: (error as ClaudeCallError).shape,
+      message: (error as Error).message,
+    });
+
+    expect(serialized).not.toContain("강남스타카페");
+    expect(serialized).not.toContain(userData);
+    for (const spy of spies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+  });
+
+  // 형식 노이즈 제거가 상류·거부·토큰 초과 계약을 건드리면 안 된다.
+  it("still reports refusal before looking at the text", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(
+      message("refusal", '```json\n{"value":"ok"}\n```'),
+    );
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "refusal" });
+  });
+
+  it("still reports max_tokens even when a fenced prefix is present", async () => {
+    anthropicMock.finalMessage.mockResolvedValue(
+      message("max_tokens", '```json\n{"value":"ok"'),
+    );
+
+    await expect(invoke()).rejects.toMatchObject({ kind: "max_tokens" });
+  });
+
+  it("still reports upstream failures with their detail intact", async () => {
+    anthropicMock.stream.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Overloaded"), {
+        request_id: "req_x",
+        error: { type: "error", error: { type: "overloaded_error" } },
+      });
+    });
+
+    await expect(invoke()).rejects.toMatchObject({
+      kind: "upstream",
+      detail: { errorType: "overloaded_error", retryable: true },
+    });
+  });
+});
+
+// 프롬프트로 부탁하는 대신 API 에 출력 스키마를 실어 보낸다. 모든 스키마가
+// 실릴 수 있는 것은 아니다 — 타입이 없는 필드(z.unknown)가 있으면 SDK 가
+// 스키마 변환 단계에서 던진다. 그 경우에도 호출 자체는 살아 있어야 한다.
+describe("callStructured 출력 형식 강제", () => {
+  const originalApiKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-api-key";
+    anthropicMock.constructor.mockClear();
+    anthropicMock.stream.mockClear();
+    anthropicMock.finalMessage.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalApiKey;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("sends the schema as an output format when it can be expressed", async () => {
+    replyWith('{"value":"ok"}');
+
+    await invoke();
+
+    const params = anthropicMock.stream.mock.calls[0]?.[0];
+    expect(params.output_config.format).toMatchObject({ type: "json_schema" });
+  });
+
+  it("keeps the effort setting alongside the output format", async () => {
+    replyWith('{"value":"ok"}');
+
+    await invoke();
+
+    const params = anthropicMock.stream.mock.calls[0]?.[0];
+    expect(params.output_config.effort).toBe("medium");
+  });
+
+  it("sends an output format for array schemas too", async () => {
+    replyWith('[{"value":"ok"}]');
+
+    await invokeArray();
+
+    const params = anthropicMock.stream.mock.calls[0]?.[0];
+    expect(params.output_config.format).toMatchObject({ type: "json_schema" });
+  });
+
+  // classifyMerchants 의 스키마가 이 형태다. 출력 형식을 실을 수 없다고 해서
+  // 호출을 포기하면 분류 경로가 통째로 죽는다 — 경계 추출만으로 계속 간다.
+  it("still calls the model when the schema cannot be expressed as a format", async () => {
+    const opaque = z.array(
+      z.object({ index: z.number().int(), verdict: z.unknown() }),
+    );
+    replyWith('```json\n[{"index":0,"verdict":"expense"}]\n```');
+
+    await expect(
+      callStructured({ system: "s", userData: "u", schema: opaque, maxTokens: 256 }),
+    ).resolves.toEqual([{ index: 0, verdict: "expense" }]);
+
+    const params = anthropicMock.stream.mock.calls[0]?.[0];
+    expect(params.output_config.effort).toBe("medium");
+    expect(params.output_config.format).toBeUndefined();
+  });
+
+  it("does not turn an unexpressible schema into a call failure", async () => {
+    const opaque = z.object({ anything: z.unknown() });
+    replyWith('{"anything":1}');
+
+    await expect(
+      callStructured({ system: "s", userData: "u", schema: opaque, maxTokens: 256 }),
+    ).resolves.toEqual({ anything: 1 });
   });
 });
