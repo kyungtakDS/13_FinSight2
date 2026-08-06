@@ -12,9 +12,10 @@ vi.mock("./client", async (importOriginal) => {
   };
 });
 
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { ColumnMap } from "@/types/csv";
 import { ClaudeCallError } from "./client";
-import { mapColumns } from "./map-columns";
+import { MapColumnsSchema, mapColumns } from "./map-columns";
 
 const validResult = {
   headerRowIndex: 1,
@@ -263,5 +264,14 @@ describe("mapColumns amount column guard", () => {
     const error = await mapColumns(deductionRows).catch((caught: unknown) => caught);
 
     expect(String((error as Error).message)).not.toContain("합성가맹점A");
+  });
+});
+
+// 이 호출은 양식 캐시가 없는 첫 업로드마다 반드시 실행되고 폴백이 없다(#33).
+// 출력 형식을 API 로 강제할 수 있는지가 이 경로의 안전성을 좌우하므로, 스키마가
+// 형식으로 변환되지 않게 바뀌면 조용히 약해지지 않도록 여기서 붙잡는다.
+describe("MapColumnsSchema 출력 형식", () => {
+  it("can be expressed as an API-enforced output format", () => {
+    expect(() => zodOutputFormat(MapColumnsSchema)).not.toThrow();
   });
 });
