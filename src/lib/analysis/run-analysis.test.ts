@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   removeTxns: vi.fn(),
   insertTxns: vi.fn(),
+  release: vi.fn(),
+  replace: vi.fn(),
   serviceClient: vi.fn(),
   detectEncoding: vi.fn(),
   decodeCsv: vi.fn(),
@@ -37,6 +39,8 @@ vi.mock("@/lib/supabase/service", () => ({
   updateUploadForUser: mocks.update,
   deleteTransactionsForUser: mocks.removeTxns,
   insertTransactionsForUser: mocks.insertTxns,
+  releaseUploadRecompute: mocks.release,
+  replaceUploadResultForUser: mocks.replace,
   createServiceClient: mocks.serviceClient,
 }));
 vi.mock("@/lib/csv/normalize", async (importOriginal) => {
@@ -139,6 +143,8 @@ describe("runAnalysis", () => {
     mocks.update.mockResolvedValue(undefined);
     mocks.removeTxns.mockResolvedValue(undefined);
     mocks.insertTxns.mockResolvedValue(undefined);
+    mocks.release.mockResolvedValue(undefined);
+    mocks.replace.mockResolvedValue(undefined);
     mappingClient(true);
   });
 
@@ -375,6 +381,74 @@ describe("runAnalysis", () => {
     const { runAnalysis } = await import("./run-analysis");
     await runAnalysis("user-1", "upload-1");
     expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled(); expect(mocks.release).not.toHaveBeenCalled();
+  });
+
+  // 재계산은 성공한 뒤에야 기존 결과를 건드린다. delete → insert 를 먼저 하면
+  // 그 사이 실패가 사용자에게서 멀쩡한 보고서를 빼앗는다.
+  it("replaces a completed result through a single RPC without deleting first", async () => {
+    mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1", { recompute: true });
+    expect(mocks.replace).toHaveBeenCalledTimes(1);
+    expect(mocks.replace).toHaveBeenCalledWith("user-1", "upload-1", expect.any(Array), {
+      summary, periodStart: "2026-01-02", periodEnd: "2026-01-02", rowCount: 1,
+    });
+    expect(mocks.removeTxns).not.toHaveBeenCalled();
+    expect(mocks.insertTxns).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stored result and only releases the lock when a recompute fails", async () => {
+    mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockRejectedValue(new ClaudeCallError("refusal"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1", { recompute: true });
+    // status·summary·error_code·retry_count 는 전부 update 를 거친다. 한 번도
+    // 부르지 않았다는 것이 곧 넷 다 그대로라는 뜻이다.
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.removeTxns).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledWith("user-1", "upload-1");
+    spy.mockRestore();
+  });
+
+  it("releases the lock when the replacement itself fails", async () => {
+    mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
+    mocks.replace.mockRejectedValue(Object.assign(new Error("boom"), { code: "P0002" }));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1", { recompute: true });
+    expect(mocks.release).toHaveBeenCalledWith("user-1", "upload-1");
+    expect(mocks.update).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("swallows a failed lock release so after() never rejects", async () => {
+    mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
+    mocks.replace.mockRejectedValue(new Error("boom"));
+    mocks.release.mockRejectedValue(new Error("release boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { runAnalysis } = await import("./run-analysis");
+    await expect(runAnalysis("user-1", "upload-1", { recompute: true })).resolves.toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("logs no merchant or CSV content when a recompute fails", async () => {
+    mocks.getUpload.mockResolvedValue({ ...upload, status: "completed" });
+    mocks.lookup.mockResolvedValue(new Map());
+    mocks.classify.mockRejectedValue(new ClaudeCallError("refusal"));
+    const spies = ["log", "error", "warn", "info"].map((method) =>
+      vi.spyOn(console, method as "error").mockImplementation(() => undefined));
+    const { runAnalysis } = await import("./run-analysis");
+    await runAnalysis("user-1", "upload-1", { recompute: true });
+    const logged = spies.flatMap((spy) => spy.mock.calls).flat().map(String).join(" ");
+    expect(logged).not.toMatch(/UNIQUE_SHOP|UNIQUE_CSV_CONTENT|CARD-9999|secret\.csv/u);
+    expect(logged).toContain("analysis_failed");
+    spies.forEach((spy) => spy.mockRestore());
   });
 
   it("never logs merchant, CSV, card number, filename, amount, or raw error", async () => {

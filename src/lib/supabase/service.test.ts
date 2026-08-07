@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   from: vi.fn(),
+  rpc: vi.fn(),
   storageFrom: vi.fn(),
   download: vi.fn(),
   remove: vi.fn(),
@@ -19,6 +20,7 @@ function queryResult(data: unknown = null) {
   const chain = {
     select: vi.fn(),
     eq: vi.fn(),
+    or: vi.fn(),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     update: vi.fn(),
@@ -27,6 +29,7 @@ function queryResult(data: unknown = null) {
   };
   chain.select.mockReturnValue(chain);
   chain.eq.mockReturnValue(chain);
+  chain.or.mockReturnValue(chain);
   chain.update.mockReturnValue(chain);
   chain.insert.mockReturnValue(chain);
   chain.delete.mockReturnValue(chain);
@@ -43,6 +46,7 @@ describe("service-role Supabase access", () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key";
     mocks.createClient.mockReturnValue({
       from: mocks.from,
+      rpc: mocks.rpc,
       storage: { from: mocks.storageFrom },
     });
     mocks.storageFrom.mockReturnValue({
@@ -67,6 +71,9 @@ describe("service-role Supabase access", () => {
       "getUploadForUser",
       "updateUploadForUser",
       "claimUploadRetry",
+      "claimUploadRecompute",
+      "releaseUploadRecompute",
+      "replaceUploadResultForUser",
       "insertTransactionsForUser",
       "deleteTransactionsForUser",
       "downloadOriginalForUser",
@@ -164,6 +171,134 @@ describe("service-role Supabase access", () => {
     const { claimUploadRetry } = await import("./service");
 
     await expect(claimUploadRetry("user-1", "upload-1", 0)).resolves.toBe(false);
+  });
+
+  it("claims a recompute with a compare-and-swap on status and a stale lock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T00:00:00.000Z"));
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [{ id: "upload-1" }], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRecompute } = await import("./service");
+
+    await expect(claimUploadRecompute("user-1", "upload-1")).resolves.toBe(true);
+
+    expect(query.update).toHaveBeenCalledWith({
+      recompute_started_at: "2026-08-07T00:00:00.000Z",
+    });
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
+    expect(query.eq).toHaveBeenCalledWith("status", "completed");
+    expect(query.or).toHaveBeenCalledWith(
+      "recompute_started_at.is.null,recompute_started_at.lt.2026-08-06T23:45:00.000Z",
+    );
+    vi.useRealTimers();
+  });
+
+  it("does not touch status or retry_count when claiming a recompute", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [{ id: "upload-1" }], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRecompute } = await import("./service");
+
+    await claimUploadRecompute("user-1", "upload-1");
+
+    const [patch] = query.update.mock.calls[0] as [Record<string, unknown>];
+    expect(Object.keys(patch)).toEqual(["recompute_started_at"]);
+  });
+
+  it("reports a lost recompute race when the guarded update matches no row", async () => {
+    const query = queryResult();
+    query.select.mockResolvedValue({ data: [], error: null });
+    mocks.from.mockReturnValue(query);
+    const { claimUploadRecompute } = await import("./service");
+
+    await expect(claimUploadRecompute("user-1", "upload-1")).resolves.toBe(false);
+  });
+
+  it("releases the recompute lock without changing the stored result", async () => {
+    const query = queryResult();
+    query.eq.mockReturnValueOnce(query).mockResolvedValueOnce({ error: null });
+    mocks.from.mockReturnValue(query);
+    const { releaseUploadRecompute } = await import("./service");
+
+    await releaseUploadRecompute("user-1", "upload-1");
+
+    expect(query.update).toHaveBeenCalledWith({ recompute_started_at: null });
+    expect(query.eq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(query.eq).toHaveBeenCalledWith("id", "upload-1");
+  });
+
+  it("treats only a lock inside the 15 minute window as running", async () => {
+    const { isRecomputing, RECOMPUTE_LOCK_MS } = await import("./service");
+
+    expect(RECOMPUTE_LOCK_MS).toBe(15 * 60 * 1000);
+    expect(isRecomputing(null)).toBe(false);
+    expect(isRecomputing(new Date(Date.now() - 60_000).toISOString())).toBe(true);
+    expect(
+      isRecomputing(new Date(Date.now() - RECOMPUTE_LOCK_MS - 1_000).toISOString()),
+    ).toBe(false);
+  });
+
+  it("replaces transactions and summary in a single RPC call", async () => {
+    mocks.rpc.mockResolvedValue({ error: null });
+    const { replaceUploadResultForUser } = await import("./service");
+    const summary = { expenseTotal: 1000 } as never;
+
+    await replaceUploadResultForUser(
+      "user-1",
+      "upload-1",
+      [
+        {
+          rowIndex: 4,
+          txnDate: "2026-07-31",
+          merchant: "merchant",
+          amount: 12000,
+          accountCode: "supplies",
+          verdict: "expense",
+        },
+      ],
+      {
+        summary,
+        periodStart: "2026-07-01",
+        periodEnd: "2026-07-31",
+        rowCount: 1,
+      },
+    );
+
+    expect(mocks.rpc).toHaveBeenCalledWith("replace_upload_result", {
+      p_user_id: "user-1",
+      p_upload_id: "upload-1",
+      p_transactions: [
+        {
+          row_index: 4,
+          txn_date: "2026-07-31",
+          merchant: "merchant",
+          amount: 12000,
+          account_code: "supplies",
+          verdict: "expense",
+        },
+      ],
+      p_summary: summary,
+      p_period_start: "2026-07-01",
+      p_period_end: "2026-07-31",
+      p_row_count: 1,
+    });
+    expect(mocks.from).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed replacement instead of reporting success", async () => {
+    mocks.rpc.mockResolvedValue({ error: { code: "P0002" } });
+    const { replaceUploadResultForUser } = await import("./service");
+
+    await expect(
+      replaceUploadResultForUser("user-1", "upload-1", [], {
+        summary: null as never,
+        periodStart: null,
+        periodEnd: null,
+        rowCount: 0,
+      }),
+    ).rejects.toMatchObject({ code: "P0002" });
   });
 
   it("inserts transaction rows with user and upload ownership", async () => {

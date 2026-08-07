@@ -7,6 +7,7 @@ import { InsightList } from "@/components/report/InsightList";
 import { LockedTable } from "@/components/report/LockedTable";
 import { MetricRow } from "@/components/report/MetricRow";
 import { ProcessingPanel } from "@/components/report/ProcessingPanel";
+import { RecomputePanel } from "@/components/report/RecomputePanel";
 import { ReportHeader } from "@/components/report/ReportHeader";
 import { SavingsHero } from "@/components/report/SavingsHero";
 import { StatusPoller } from "@/components/report/StatusPoller";
@@ -14,7 +15,7 @@ import { TransactionTable, type ReportTransaction } from "@/components/report/Tr
 import { UncertainBanner } from "@/components/report/UncertainBanner";
 import { gateReport, viewScope } from "@/lib/gate";
 import { createClient, getUser } from "@/lib/supabase/server";
-import { getProfilePlan, getUploadForUser } from "@/lib/supabase/service";
+import { getProfilePlan, getUploadForUser, isRecomputing } from "@/lib/supabase/service";
 
 type UploadPageProps = { params: Promise<{ id: string }> };
 
@@ -80,6 +81,10 @@ export default async function UploadPage({ params }: UploadPageProps) {
   const report = gateReport(plan, upload.summary, transactions);
   if (!scope.canViewTransactions) report.lockedTxnCount = upload.rowCount ?? 0;
   const { summary } = report;
+  // 원본 보관 기한이 지났는지 server render 시점에 판정한다 — 파기된 뒤에는
+  // 눌러도 409 만 돌아오므로 버튼 자체를 내지 않는다.
+  // eslint-disable-next-line react-hooks/purity
+  const canRecompute = Boolean(upload.storagePath) && new Date(upload.expiresAt).getTime() > Date.now();
 
   return <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-xl)" }}>
     <ReportHeader periodStart={upload.periodStart} periodEnd={upload.periodEnd} txnCount={summary.txnCount} />
@@ -91,6 +96,7 @@ export default async function UploadPage({ params }: UploadPageProps) {
     {scope.canViewTransactions
       ? <TransactionTable transactions={report.transactions} />
       : <LockedTable lockedCount={report.lockedTxnCount} />}
+    <RecomputePanel uploadId={id} canRecompute={canRecompute} recomputing={isRecomputing(upload.recomputeStartedAt)} />
     <Disclaimer />
   </div>;
 }
