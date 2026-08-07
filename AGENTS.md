@@ -21,6 +21,8 @@
 - CRITICAL: **카드번호·승인번호는 정규화 단계에서 제거하고 저장하지 마라** — 스키마에 컬럼 자체를 두지 않는다. 정규화된 거래 행은 `transactions`에 저장한다(ADR-015). 원본 CSV는 비공개 Storage 버킷에만 두고 90일 후 파기한다.
 - CRITICAL: **합계·구성비·절세 추정액을 모델에게 계산시키지 마라.** 모델 출력은 *거래별 계정과목 · 경비 판정 · 근거 한 줄*까지고, 산술은 서버 TypeScript가 원본 금액으로 한다.
 - CRITICAL: **로그에 PII를 남기지 마라.** 가맹점명·카드번호·CSV 내용·웹훅 원문 body 금지. 실패 시 에러 코드와 행 수만 남긴다.
+- CRITICAL: **`@polar-sh/nextjs`의 `Checkout`·`CustomerPortal`·`Webhooks` 헬퍼를 쓰지 마라.** `@polar-sh/sdk`를 직접 부른다. 이유: `Checkout`이 `products`·`customerId`·`customerExternalId`·`customerEmail`·`discountId`·`metadata` 등 **11개를 쿼리 파라미터에서 읽어** "요청의 product ID·user ID·return URL을 신뢰하지 않는다"를 정면으로 위반하고, 세 헬퍼 모두 `console.error(error)`로 SDK 원본 에러(고객 식별자·이메일 포함 가능)를 그대로 남긴다. 서명 검증은 `@polar-sh/sdk/webhooks`의 `validateEvent`를 직접 부른다 (ADR-023).
+- CRITICAL: **`profiles.plan`을 쓰는 경로는 `apply_polar_event` 하나뿐이다.** 라우트·페이지·서비스 어디서도 `plan`을 UPDATE하지 마라. `service_role`은 `profiles` UPDATE 권한 자체가 없고 그 함수의 EXECUTE만 갖는다 — 규율이 아니라 권한이 막는다(ADR-020).
 - 컴포넌트는 `src/components/`, 타입은 `src/types/`, 순수 로직은 `src/lib/`, 외부 SDK 래퍼는 `src/services/`.
 - 차트·결과 컴포넌트는 **데이터를 props로 받는다.** 데이터 페칭은 페이지가 한다 — 같은 컴포넌트를 무료(부분 데이터)와 유료(전체 데이터)로 렌더해야 하고, 테스트가 픽스처로 렌더해야 하기 때문이다.
 - 클라이언트로 나가는 에러는 **고정 어휘**만: `parse_failed`·`rows_unreadable`·`too_large`·`duplicate_file`·`analysis_failed`·`upstream`·`expired`·`payment_required`. 예외 메시지·SQL 에러를 그대로 실어 보내지 마라. `rows_unreadable`은 CSV는 읽었지만 거래 날짜 또는 필수 거래 정보를 해석하지 못한 경우다 — 파일 자체를 읽지 못한 `parse_failed`와 구분한다.
@@ -32,6 +34,15 @@
 - `src/middleware.ts`는 tdd-guard 면제가 **아니다** — `src/middleware.test.ts`를 먼저 써라.
 - 마이그레이션에 `DROP TABLE`을 쓰지 마라 (PreToolUse 훅이 차단한다).
 - 커밋 메시지는 conventional commits 형식 (feat:, fix:, docs:, refactor:)
+
+### 마이그레이션
+
+- **번호는 `ls supabase/migrations | tail -1`의 다음 번호다. 계획 문서에 적힌 번호를 믿지 마라.** 실제로 Phase 5 계획서가 예약한 `0005`를 `0005_grants.sql`이 가져가 충돌했다.
+- **적용된 마이그레이션 파일을 수정하지 마라.** `0001`~`0007`은 live DB에 적용됐다 — 고치면 파일과 DB가 갈린다. 새 파일만 추가한다.
+- **새 테이블·함수를 만들면 같은 마이그레이션 안에서 GRANT를 준다.** `0005_grants.sql`의 GRANT는 테이블 단위라 새 컬럼은 상속되지만 **새 테이블·함수는 상속되지 않는다.** RLS 정책은 "어느 행"이고, 그 이전에 "이 롤이 이 테이블을 건드릴 수 있나"(GRANT)가 통과해야 한다 — 이게 빠져서 `uploads`가 0행이었다.
+- **`create or replace function` 뒤에 `revoke execute ... from public, anon, authenticated`를 반드시 붙인다.** `create or replace`가 EXECUTE를 PUBLIC에 자동으로 주므로 순서를 뒤집으면 PostgREST의 `/rest/v1/rpc/`로 미로그인 호출이 열린다. 그다음 필요한 롤에만 `grant execute`.
+- 마이그레이션은 **멱등**이어야 한다 (`if not exists` · `create or replace` · `on conflict do nothing`). 사람이 SQL Editor에서 두 번 붙여 넣는 일이 실제로 일어난다.
+- 새 불변식은 `supabase/migrations.test.ts`에 **SQL 텍스트 검사**로 추가한다. DB 없이 도는 회귀 방어다.
 
 ## 명령어
 ```

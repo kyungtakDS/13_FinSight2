@@ -1,208 +1,309 @@
-# Step 3: upgrade-page
+# Step 3: polar-webhook
 
 ## 목적
 
-`/upgrade` 페이지를 만들고, 대시보드에 `?checkout=1` 안내를 붙인다. **전체 계획의 마지막 step이다.**
+`POST /api/webhook/polar` — 서명 검증된 웹훅으로 `profiles.plan`을 갱신한다.
 
-`/upgrade`는 프로토타입의 `PaywallModal` 내용을 **페이지로** 만든 것이다(DESIGN.md §6). 모달로 만들지 마라 — 인증은 Google OAuth 리다이렉트고 결제는 `/upgrade` → Polar Checkout 리다이렉트다. 프로토타입은 단일 HTML이라 모달로 흉내 냈을 뿐이다.
+**이것이 Pro 권한의 유일한 출처다**(ADR-020). 다른 어떤 경로도 `plan`을 `pro`로 바꾸지 않는다.
 
-`?checkout=1`이 여는 것은 **안내 문구지 기능이 아니다**(ADR-020).
+이 step은 **라우트 핸들러만 만든다.** DB 함수 `apply_polar_event`와 그 GRANT는 **step 1(`billing-schema`)이 이미 만들었다.** 여기서 마이그레이션을 쓰지 마라.
+
+네 가지가 여기서 지켜져야 하고, **하나라도 틀리면 "결제는 성공했는데 영원히 Free"가 된다**:
+
+1. **원문 body 서명 검증이 가장 먼저** — 검증 전 JSON 파싱·DB 쓰기·로그 출력 금지
+2. **`webhook_events` INSERT와 `profiles` 갱신은 한 transaction** (ADR-021) — RPC 한 번으로
+3. **순서 역전 방어 2단** — `source_modified_at` + subscription ID 일치
+4. **구독 종료는 `plan`을 되돌릴 뿐 데이터를 건드리지 않는다** (ADR-008)
 
 ## 이전 Step과의 의존성
 
-- **step 1 (`billing-routes`)** — `POST /api/billing/checkout`·`/portal`
-- **step 2 (`polar-webhook`)** — `plan`이 여기서만 바뀐다는 사실. 웹훅 지연 구간이 `?checkout=1` 안내의 존재 이유다
-- **Phase 3 step 0 (`app-shell`)** — 셸. `/upgrade`는 앱 레이어다. 사이드바 nav가 이미 `/upgrade`를 가리킨다
-- **Phase 3 step 5 (`report-table-lock`)** — `LockedTable`의 CTA가 `/upgrade`로 온다
-- **Phase 4 step 1 (`landing`)** — `Pricing`의 Pro CTA가 `/upgrade`로 온다
-- **Phase 0 step 5 (`auth-flow`)** — 미들웨어가 `/upgrade`를 보호한다
+- **step 0 (`polar-client`)** — `getWebhookSecret`. 그 step의 `summary`에 SDK API 이름이 있다
+- **step 1 (`billing-schema`)** — `apply_polar_event` RPC의 **인자 순서와 반환 어휘**. `phases/5-billing/index.json`의 step 1 `summary`와 `supabase/migrations/0008_polar_event_fn.sql`을 반드시 읽어라
+- **step 2 (`billing-routes`)** — `external_customer_id`가 세션 `user.id`라는 계약
+- **Phase 0 step 4** — `createServiceClient()` (웹훅에는 사용자 컨텍스트가 없다)
 
 ## 읽어야 할 파일
 
-- `/docs/DESIGN.md` — **§6의 `/upgrade`** · §0(앱 레이어) · §5 · §7(잠긴 상태) · §10
-- `/design/prototype/report.jsx` — `PaywallModal` 내용 참조 (**모달로 만들지 마라**)
-- `/docs/ADR.md` — ADR-007 · ADR-008 · **ADR-020(`?checkout=1`의 의미)**
-- `/docs/PRD.md` — §구독 및 기능 게이트 표 · §구독 종료 후 접근 정책 · UC-07 · UC-13 · UC-15
-- `/src/app/api/billing/**` — step 1 산출물
-- `/src/app/dashboard/page.tsx` · `/src/components/app/**`
+- `/docs/ARCHITECTURE.md` — **§Polar 결제 전문** · §Supabase 키 사용 규칙의 「Polar 웹훅」 행 · §DB 스키마의 `profiles`·`webhook_events`
+- `/docs/ADR.md` — **ADR-021 전문** · ADR-020 · **ADR-008** · **ADR-023(SDK 헬퍼 미사용)**
+- `/phases/PLAN.md` — **D-11 ~ D-14, D-16** (이벤트 매핑과 서명 검증 방식의 결정 근거)
+- `/docs/PRD.md` — UC-14 · UC-15 · §구독 종료 후 접근 정책
+- `/supabase/migrations/0008_polar_event_fn.sql` — **step 1 산출물. RPC 시그니처의 단일 출처**
+- `/src/services/polar/client.ts` · `/src/app/api/billing/checkout/route.ts`
+- `node_modules/@polar-sh/sdk/dist/commonjs/models/components/` 의 `webhooksubscription*payload` 와 `subscriptionstatus` — **이벤트 타입·status 값을 여기서 확인하라. 추측하지 마라**
 
 ## 구현 범위
 
 ```
-src/app/upgrade/page.tsx                    — 가격 · 잠긴 기능 4개 · 구독 시작 · 정책 문구
-src/components/billing/CheckoutNotice.tsx   — ?checkout=1 안내 (대시보드에 얹는다)
-src/app/dashboard/page.tsx                  — 수정: 안내 배너 배선
+src/app/api/webhook/polar/route.ts      — POST
 ```
+
+**마이그레이션을 만들지 마라.** `0008`은 step 1이 이미 만들었다.
 
 ## 수정 대상 파일
 
 ```
-src/app/upgrade/page.tsx                         (신규 — tdd-guard 면제)
-src/app/upgrade/page.test.tsx                    (신규 — 먼저)
-src/components/billing/CheckoutNotice.tsx        (신규)
-src/components/billing/CheckoutNotice.test.tsx   (신규 — 먼저)
-src/app/dashboard/page.tsx                       (수정)
+src/app/api/webhook/polar/route.ts              (신규)
+src/app/api/webhook/polar/route.test.ts         (신규 — 먼저)
 ```
+
+## 서명 검증 — `Webhooks` 헬퍼를 쓰지 마라 (D-14)
+
+`@polar-sh/nextjs`의 `Webhooks()` 헬퍼는 raw body 검증 자체는 올바르게 하지만
+(`dist/index.js`: `await request.text()` → `validateEvent`), 응답 코드를 우리가 통제할 수 없다.
+검증 실패에 **403**을 반환하고, 성공 시 `{received:true}` 200을 강제한다.
+
+**`@polar-sh/sdk/webhooks`의 `validateEvent`를 직접 부른다.**
+
+```ts
+import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks';
+
+export const runtime = 'nodejs';
+
+export async function POST(req: Request) {
+  const raw = await req.text();                     // ✅ raw body 먼저
+  let event;
+  try {
+    event = validateEvent(
+      raw,
+      {
+        'webhook-id':        req.headers.get('webhook-id') ?? '',
+        'webhook-timestamp': req.headers.get('webhook-timestamp') ?? '',
+        'webhook-signature': req.headers.get('webhook-signature') ?? '',
+      },
+      getWebhookSecret(),
+    );
+  } catch (e) {
+    if (e instanceof WebhookVerificationError) {
+      return new Response(null, { status: 401 });   // 로그에 raw 를 남기지 마라
+    }
+    throw e;
+  }
+  …
+}
+```
+
+헤더 이름 3개(`webhook-id`·`webhook-timestamp`·`webhook-signature`)는 Standard Webhooks 규격이고
+`@polar-sh/nextjs@0.9.6`의 구현에서 확인된 값이다. **그래도 설치된 SDK의 타입에서 다시 확인하라.**
+
+## 이벤트 → plan 매핑 ← D-11 · D-12 · D-13
+
+**`subscription.unpaid` 이벤트는 존재하지 않는다.** `@polar-sh/sdk@0.49.0`의 웹훅 페이로드는
+아래 9개뿐이고, `unpaid`는 `SubscriptionStatus` enum의 값으로 `subscription.updated`
+안에서만 온다. 이걸 이벤트 타입으로 착각하면 `unpaid` 처리가 영원히 안 돈다.
+
+| 이벤트 타입 | 처리 |
+|---|---|
+| `subscription.created` | `data.status`에서 파생 |
+| `subscription.updated` | `data.status`에서 파생 ← **`unpaid`가 여기로 온다** |
+| `subscription.active` | `pro` |
+| `subscription.uncanceled` | `pro` |
+| `subscription.resumed` | `pro` |
+| `subscription.past_due` | **`pro` 유지** — 우리 쪽 유예 타이머 없음 |
+| `subscription.canceled` | **`pro` 유지** ← **D-11. 해지 예약일 뿐이다** |
+| `subscription.paused` | `free` |
+| `subscription.revoked` | **`free`** ← 실제 종료는 여기다 |
+| 그 외 전부 (`order.*` 등) | **200 + 아무것도 안 함** |
+
+`data.status` → plan 파생 (`SubscriptionStatus` 8값 전부를 덮어라):
+
+| status | plan | 근거 |
+|---|---|---|
+| `active` | `pro` | |
+| `trialing` | `pro` | **D-13** |
+| `past_due` | `pro` | 유예 타이머 없음. Polar가 판단한다 |
+| `unpaid` | `free` | **D-12** |
+| `paused` | `free` | **D-13** |
+| `canceled` | `free` | 단 아래 이중 안전장치를 보라 |
+| `incomplete` | `free` | 첫 결제 미완료 |
+| `incomplete_expired` | `free` | |
+
+### 이중 안전장치 — `canceled` 이벤트는 어떤 경우에도 내리지 않는다
+
+`subscription.canceled` 이벤트가 도착할 때 `data.status`가 `active`(해지 예약, 기간 남음)인지
+`canceled`인지는 Polar 구현에 달렸고 **우리가 확정할 수 없다.** 그래서 두 겹으로 막는다:
+
+1. `data.status`에서 plan을 파생하고,
+2. **이벤트 타입이 `subscription.canceled`면 파생 결과를 무시하고 `pro`를 유지한다.**
+
+이러면 status가 어느 쪽으로 오든 결과가 같다. **D-11의 약속("결제한 기간 끝까지 이용")이
+Polar의 내부 표현에 의존하지 않게 된다.** 실제 종료는 `revoked`가 온다.
 
 ## 먼저 작성할 테스트
 
-### `/upgrade` — 구성 요소
-1. 가격이 표시된다 (`₩9,900 / 월`, `.num`)
-2. **잠긴 기능이 4개** 나열된다 (DESIGN.md §6: "잠긴 기능 4개"). PRD 표 기준으로: 거래별 분류 내역 · 판정 근거 · 전체 인사이트 · 세무사 전달용 다운로드
-3. **"구독 시작하기"** CTA가 `POST /api/billing/checkout`으로 간다
-4. **"결제·영수증·해지는 Polar 고객 포털에서 관리됩니다"** 문구가 있다
-5. **"해지 후에도 데이터는 지우지 않습니다"** 문구가 있다(ADR-008)
+### 서명 검증이 가장 먼저 ← 순서가 핵심 (게이트 G4)
+1. **`req.text()`로 raw body를 받는다.** `req.json()`을 먼저 부르면 body가 소비돼 검증이 깨진다. 소스에서 `req.json()` 부재를 검사하라
+2. 서명이 없으면 **401**. **JSON 파싱을 시도하지 않는다** (파서 mock 호출 0회)
+3. 서명이 틀리면 **401**. DB mock 호출 0회
+4. **검증 실패 시 body를 로그에 남기지 않는다** — `console` spy로 body 문자열 부재 확인
+5. 서명이 맞을 때만 파싱한다
+6. **`@polar-sh/nextjs`의 `Webhooks`를 import하지 않는다** (D-14) — 소스 검사
 
-### `/upgrade` — plan에 따른 분기
-6. `plan === 'free'`면 "구독 시작하기"가 보인다
-7. **`plan === 'pro'`면 checkout CTA가 안 보이고**, 대신 고객 포털 링크가 보인다 (이미 구독 중인 사람에게 결제 버튼을 보여주지 마라)
-8. `plan`을 **서버에서 읽는다** — Server Component. `?plan=pro`를 붙여도 안 바뀐다
-9. `plan === 'free'`면 **포털 링크가 안 보인다** — `polar_customer_id`가 없어 포털이 열리지 않는다(step 1의 계약)
+### 멱등 + 원자성 ← ADR-021
+7. 같은 `event_id`가 두 번 오면 두 번째는 **`duplicate`**이고 `profiles`가 안 바뀐다
+8. **`webhook_events` INSERT와 `profiles` UPDATE가 한 RPC 호출로 나간다.** `.from('profiles').update`·`.from('webhook_events').insert`가 **0회**임을 assert하라. 이게 ADR-021의 전부다 (G1)
+9. RPC가 실패하면 **5xx를 반환한다** — Polar가 재전송하게 해야 한다. 200을 주면 영원히 잃는다
 
-### `/upgrade` — 모달이 아니다
-10. 실제 라우트 페이지다. `.fs-scrim`/`.fs-modal`을 쓰지 않는다
-11. 앱 셸(`AppShell`) 안에 렌더된다 — 사이드바에서 온 사용자가 문맥을 잃지 않는다
+### 순서 역전 방어 2단
+10. `modified_at`이 저장된 `source_modified_at`보다 **오래되면 무시**한다 (`stale`)
+11. `modified_at`이 같거나 새로우면 적용한다
+12. **subscription ID가 `profiles.polar_subscription_id`와 다르면 무시**한다 (`subscription_mismatch`)
+13. 단, 현재 `polar_subscription_id`가 `null`이면(첫 구독) 통과한다
+14. 무시된 이벤트도 **`webhook_events`에는 기록된다** (재전송에 다시 처리하지 않기 위해)
 
-### `CheckoutNotice` ← 안내지 기능이 아니다
-12. `?checkout=1`이고 `plan === 'free'`면 **"결제 확인 중"** 안내가 보인다
-13. **`?checkout=1`이고 `plan === 'pro'`면 안내가 안 보인다** — 이미 반영됐다
-14. `?checkout=1`이 없으면 안 보인다
-15. **`?checkout=1`이 어떤 기능도 열지 않는다.** 이 컴포넌트가 렌더하는 것이 문구와 새로고침 안내뿐임을 검사하라 — 거래 데이터·다운로드 링크·Pro 전용 UI가 없다
-16. **폴링하지 않는다.** `setInterval`·`fetch` 호출 0회. "늦으면 새로고침이 답이다"(ADR-020)
-17. 새로고침을 안내하는 문구가 있다
+### 이벤트 → plan 매핑 ← D-11 · D-12 · D-13
+15. `subscription.active` → `pro`
+16. `subscription.uncanceled` → `pro`
+17. `subscription.resumed` → `pro`
+18. `subscription.past_due` → **`pro` 유지**. 유예 타이머 없음
+19. **`subscription.canceled` → `pro` 유지** (D-11). `data.status`가 `canceled`로 와도 `pro`다 ← 이중 안전장치 검증
+20. **`subscription.revoked` → `free`** — 여기가 유일한 종료 지점
+21. `subscription.paused` → `free` (D-13)
+22. **`subscription.updated` + `data.status === 'unpaid'` → `free`** (D-12)
+23. `subscription.updated` + `data.status === 'trialing'` → `pro` (D-13)
+24. `subscription.updated` + `data.status === 'active'` → `pro`
+25. `subscription.created` + `data.status === 'incomplete'` → `free`
+26. **`SubscriptionStatus` 8값 전부에 대해 파생 함수가 정의돼 있다** — 테이블 주도 테스트로 8건
+27. 알 수 없는 이벤트 타입(`order.created` 등) → **200을 반환하고 RPC를 부르지 않는다.** 재전송을 유발하지 마라
 
-### 접근성·디자인
-18. 아이콘 전용 버튼에 `aria-label`
-19. 앱 레이어다 — **파스텔 color-block을 쓰지 않는다**(DESIGN.md §0)
-20. raw hex·raw px·이모지 없음 · `--fs-*` 앱 토큰은 **써도 된다**(여기는 앱 레이어다)
+### 사용자 연결
+28. `external_customer_id`로 `profiles.user_id`를 찾는다
+29. 찾을 수 없으면 **200을 반환한다** (재전송해도 못 찾는다) 그리고 로그에 코드만 남긴다
+30. `polar_customer_id`를 `profiles`에 저장한다 (없었으면) — **RPC 안에서**. 별도 UPDATE를 내지 마라
 
-### 라우트
-21. `/upgrade` 하나만 추가된다. `/billing/*` 하위 라우트가 없다
+### 데이터를 건드리지 않는다 ← ADR-008 (G2)
+31. **어떤 경로에서도 `uploads`·`transactions`를 삭제·수정하지 않는다.** 두 테이블에 대한 mock 호출 0회를 assert하라. 이 테스트 하나가 ADR-008을 지킨다
+32. `free`로 되돌릴 때도 마찬가지다
+
+### 로깅
+33. **웹훅 원문 body가 로그에 없다**(AGENTS.md CRITICAL)
+34. 이메일·customer ID·subscription ID가 로그에 없다
+35. 남기는 것은 이벤트 타입과 처리 결과 코드뿐이다
 
 ## Codex 실행 지시문
 
-### 모달로 만들지 마라
+### 검증 전에는 아무것도 하지 마라
 
-DESIGN.md §6: *"프로토타입의 `AuthModal`·`PaywallModal`은 **모달로 만들지 마라.** 이유: 인증은 Google OAuth 리다이렉트고 결제는 `/upgrade` → Polar Checkout 리다이렉트다. 프로토타입은 단일 HTML이라 모달로 흉내 냈을 뿐이다."*
+ARCHITECTURE.md: *"웹훅은 **원문 body 서명 검증을 가장 먼저** 한다. 검증 전 JSON 파싱·DB 쓰기·로그 출력 금지."*
 
-`report.jsx`의 `PaywallModal` **내용**을 가져오고 **형태**는 페이지로 만들어라.
+### 한 transaction — RPC 한 번
 
-### `?checkout=1`이 여는 것은 문구다
+```ts
+const { data, error } = await supabase.rpc('apply_polar_event', { … });
+if (error) return new Response(null, { status: 500 });   // Polar 가 재전송한다
+```
 
-ADR-020:
+ADR-021: *"분리하면 크래시 시 이벤트가 *처리됨*으로 기록된 채 반영되지 않고, Polar의 재전송마저 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free."*
 
-> 대시보드는 `profiles.plan`을 **서버에서 읽어** 화면을 정하고, `checkout=1`은 아직 Free일 때 "결제 확인 중" 안내를 띄우는 데만 쓴다. **쿼리 파라미터가 여는 것은 안내 문구지 기능이 아니다.**
+**`webhook_events` INSERT를 먼저 하고 `profiles`를 나중에 업데이트하는 두 쿼리로 만들지 마라. 성능을 이유로도 분리하지 마라** — ADR이 명시적으로 금지했다. 인자 순서는 `0008_polar_event_fn.sql`에서 그대로 읽어 와라.
 
-`?checkout=1`로 거래 표를 열거나 다운로드를 허용하는 코드를 **절대** 쓰지 마라. 그러면 URL 하나로 유료 기능이 열린다.
+### 순서 역전 방어는 2단이다
 
-### 폴링하지 마라
+타임스탬프만으로는 부족하다. 시나리오: 해지 → 재구독. 옛 구독의 `revoked`가 새 구독의 `active`보다 늦게 도착하면, 타임스탬프는 `revoked`가 더 새로울 수 있다(발생 시각이 아니라 전송 순서 문제). subscription ID가 다르면 무시해야 한다.
 
-ADR-020: *"**전용 성공 페이지와 상태 폴링 라우트는 두지 않는다** — 웹훅은 보통 수 초 안에 도착하고, 늦으면 새로고침이 답이다."*
+### `past_due`는 Pro 유지
 
-`CheckoutNotice`에 `setInterval`을 넣고 싶어질 것이다. 넣지 마라. 문구로 "잠시 후 새로고침해 주세요"라고 말하면 된다.
+ARCHITECTURE.md: *"`past_due`는 Polar가 `unpaid`/`revoked`를 보낼 때까지 Pro 유지. **우리 쪽 유예 타이머를 만들지 않는다**."*
 
-### `pro`에게 결제 버튼을 보여주지 마라
+`past_due` 이벤트에 "3일 뒤 잠금" 같은 로직을 넣지 마라. Polar가 판단한다.
 
-이미 구독 중인 사용자가 `/upgrade`에 오면(사이드바 nav에 있으므로 온다) **구독 관리 화면**이 되어야 한다. 결제 버튼을 다시 보여주면 이중 결제를 시도한다.
+### 구독 종료가 데이터를 건드리지 않는다
 
-step 1의 checkout 라우트가 `plan === 'pro'`를 막지만, **화면에서도 안 보이는 것이 맞다.**
+ARCHITECTURE.md: *"**구독 종료는 `profiles.plan`을 `free`로 되돌릴 뿐 데이터를 건드리지 않는다.**"*
 
-### 잠긴 기능 4개
+이걸 "정리"라고 생각해서 넣지 마라. 재구독 사용자에게 재분석을 강요해 우리 원가를 태우고, 세무 자료를 잃은 사용자에게 신뢰를 잃는다(ADR-008).
 
-PRD §구독 및 기능 게이트 표에서 유료만 있는 것 + 무료가 부분인 것:
+### 알 수 없는 이벤트에 200
 
-| | 무료 | Pro |
-|---|---|---|
-| 인사이트 | 상위 3개 | **전체** |
-| 거래별 분류 내역 | ✗ | **✓** |
-| 판정 근거 | ✗ | **✓** |
-| 세무사 전달용 다운로드 | ✗ | **✓** |
+Polar가 우리가 모르는 이벤트(`order.*`·`benefit.*`·`customer.*`)를 보낸다. **200을 주고 무시하라.** 4xx/5xx를 주면 Polar가 계속 재전송한다. `webhook_events`에도 넣지 마라 — 우리가 처리하는 이벤트만 기록한다.
 
-**"업로드·분석 무제한"을 Pro 혜택으로 쓰지 마라** — 무료도 무제한이다(ADR-007). 그건 오해를 만든다.
+### 로깅
 
-### 정책 문구 두 개
+```ts
+// ✅ console.info(JSON.stringify({ event: 'polar_webhook', type, result }));
+// ❌ console.log(raw)  · console.error(event)  · console.log(customerId)
+```
 
-DESIGN.md §6이 명시한다:
+AGENTS.md CRITICAL: *"로그에 PII를 남기지 마라. … 웹훅 원문 body 금지."*
 
-> "구독 시작하기"(Polar Checkout으로 나감) · **"결제·영수증·해지는 Polar 고객 포털에서 관리됩니다. 해지 후에도 데이터는 지우지 않습니다."**
+### `service role`을 쓴다
 
-둘 다 넣어라. 두 번째는 ADR-008의 약속을 사용자에게 말하는 것이고, 결제 결정에 영향을 준다.
+웹훅에는 사용자 컨텍스트가 없다. **서명 검증이 유일한 관문이다**(ARCHITECTURE.md §Supabase 키 사용 규칙). service_role은 `apply_polar_event` **EXECUTE만** 갖는다(D-16) — `profiles`에 직접 UPDATE를 시도하면 권한 에러가 난다. 그게 의도다.
 
-### 앱 레이어다
+### `subscriptions` 테이블을 만들지 마라
 
-`/upgrade`는 DESIGN.md §0의 **앱** 레이어다 — 무채색 + 딥블루. `--fs-*` 토큰을 쓰고 파스텔 color-block을 쓰지 마라.
-
-랜딩의 `PricingCard`(마케팅 컴포넌트)를 여기서 재사용하지 마라 — 레이어가 다르다.
-
-### 새 라우트를 만들지 마라
-
-`/upgrade` 하나다. `/billing/success`·`/billing/manage` 같은 것을 만들지 마라.
+ADR-021. 앱이 묻는 질문은 "Pro인가" 하나다.
 
 ## 완료 조건
 
-- `/upgrade` + `CheckoutNotice` + 테스트가 존재하고 21개 항목이 전부 통과한다
-- 모달이 아니라 페이지다
-- `pro`에게 결제 CTA가 안 보인다
-- `?checkout=1`이 문구만 열고 기능을 열지 않는다
-- 폴링이 없다
-- 정책 문구 2개가 있다
-- 앱 레이어 표현이다 (파스텔 없음)
-- 새 라우트가 `/upgrade` 하나뿐이다
+- 라우트 + 테스트가 존재하고 35개 항목이 전부 통과한다
+- `req.json()`이 소스에 없다 (raw body 검증)
+- `@polar-sh/nextjs`를 import하지 않는다 (D-14 · D-15)
+- 검증 실패 시 401이고 파싱·DB·로그가 없다
+- 멱등 기록과 `plan` 갱신이 **한 RPC 호출**이다
+- 순서 역전 방어 2단이 있다
+- `canceled`가 `pro`를 유지하고 `revoked`만 `free`로 내린다
+- `unpaid`가 `subscription.updated`의 status로 처리된다
+- **`uploads`·`transactions`를 건드리지 않는다**
+- 알 수 없는 이벤트에 200
+- 로그에 body·customer ID가 없다
+- **마이그레이션 파일을 새로 만들지 않았다**
 - `npm run lint && npm run build && npm run test` 통과
 
 ## 검증 명령
 
 ```bash
 npm run lint && npm run build && npm run test
-npx vitest run src/app/upgrade src/components/billing
+npx vitest run src/app/api/webhook/polar/route.test.ts
 ```
 
 직접 확인:
 
 ```bash
-grep -nE "setInterval|setTimeout|fetch\(" src/components/billing/CheckoutNotice.tsx && echo "FAIL: 폴링" || echo "OK"
-grep -nE "checkout=1|searchParams" src/app/dashboard/page.tsx
-# → checkout=1 이 안내 문구 외의 분기를 만들지 않는지 눈으로 확인
-grep -n "color-block" src/app/upgrade/page.tsx && echo "FAIL: 앱에 파스텔" || echo "OK"
-grep -nE "fs-modal|fs-scrim" src/app/upgrade/page.tsx && echo "FAIL: 모달" || echo "OK"
-ls src/app/billing 2>/dev/null && echo "FAIL: 새 라우트" || echo "OK"
+grep -n "req.json()" src/app/api/webhook/polar/route.ts && echo "FAIL: 서명 검증이 깨진다" || echo "OK"
+grep -n "@polar-sh/nextjs" src/app/api/webhook/polar/route.ts && echo "FAIL: D-14/D-15 위반" || echo "OK"
+grep -nE "uploads|transactions" src/app/api/webhook/polar/route.ts && echo "FAIL: 데이터를 건드린다" || echo "OK"
+grep -c "rpc(" src/app/api/webhook/polar/route.ts    # 1 이어야 한다
+grep -nE "\.from\(.(profiles|webhook_events)" src/app/api/webhook/polar/route.ts && echo "FAIL: RPC 밖에서 쓴다" || echo "OK"
+grep -nE "setTimeout|유예|grace" src/app/api/webhook/polar/route.ts && echo "FAIL: 유예 타이머" || echo "OK"
+git status --porcelain supabase/migrations/ | grep . && echo "FAIL: 이 step 은 마이그레이션을 만들지 않는다" || echo "OK"
 ```
 
 ## 검증 절차
 
 1. 위 AC 커맨드를 실행한다.
 2. 아키텍처 체크리스트:
-   - DESIGN.md §6 — 모달이 아니라 페이지인가? 정책 문구 2개가 있는가? 라우트가 5개 고정을 지키는가?
-   - DESIGN.md §0 — 앱 레이어 표현인가? (파스텔 없음, `--fs-*` 사용)
-   - ADR-020 — `?checkout=1`이 문구만 여는가? 폴링·성공 페이지가 없는가?
-   - ADR-008 — "해지 후에도 데이터를 지우지 않습니다"가 있는가?
-   - ADR-007 — 무료도 무제한임을 오해하게 쓰지 않았는가?
-   - AGENTS.md CRITICAL — `plan`을 서버에서 읽는가?
+   - ARCHITECTURE.md §Polar 결제 (G4) — 서명 검증이 가장 먼저인가? 한 transaction인가? 순서 역전 2단인가? `past_due`가 Pro 유지인가?
+   - ADR-021 (G1) — `webhook_events` INSERT와 `profiles` 갱신이 나뉘지 않았는가? `subscriptions` 테이블이 없는가?
+   - ADR-008 (G2) — `uploads`·`transactions`를 건드리지 않는가? `canceled`가 잠그지 않는가?
+   - ADR-020 — 이곳이 `plan`을 바꾸는 유일한 경로인가?
+   - ADR-023 / D-14 · D-15 — SDK 프레임워크 헬퍼를 안 썼는가?
+   - AGENTS.md CRITICAL — 로그에 웹훅 body가 없는가? service role을 쓰는가?
 3. 결과에 따라 `phases/5-billing/index.json`의 step 3을 업데이트한다:
-   - 성공 → `"status": "completed"`, `"summary"` 한 줄 (예: "app/upgrade/page.tsx(앱 레이어 페이지, 모달 아님) — 가격·잠긴 기능 4개·구독 시작하기→/api/billing/checkout, pro면 CTA 숨기고 포털 링크, 정책 문구 2개. components/billing/CheckoutNotice.tsx는 ?checkout=1 && free 일 때만 '결제 확인 중' 문구(폴링 없음, 기능 안 열림)")
+   - 성공 → `"status": "completed"`, `"summary"` 한 줄 (예: "api/webhook/polar/route.ts — validateEvent 직접 호출(@polar-sh/nextjs 미사용), req.text() 원문 서명 검증 최우선·실패 401, 단일 apply_polar_event RPC, 순서 역전 2단, canceled는 pro 유지·revoked만 free, unpaid는 subscription.updated의 status로, trialing→pro/paused→free, uploads·transactions 미접촉, 알 수 없는 이벤트는 200 무처리")
    - 3회 실패 → `"status": "error"` + `"error_message"`
    - 사람 개입 필요 → `"status": "blocked"` + `"blocked_reason"` 후 중단
 
-**이 step이 끝나면 Phase 5와 전체 계획이 완료된다.** `summary`에 「Phase 5 검토 지점: Polar 샌드박스 결제 → 웹훅 → `profiles.plan` 전이 수동 검증 필요」를 덧붙여라(`phases/PLAN.md` D-9).
-
 ## commit 기준
 
-`feat(5-billing): step 3 — upgrade-page`
+`feat(5-billing): step 3 — polar-webhook`
 
-포함: `src/app/upgrade/page.{tsx,test.tsx}` · `src/components/billing/**` · `src/app/dashboard/page.tsx`
+포함: `src/app/api/webhook/polar/route.{ts,test.ts}`
 
 ## 금지사항
 
-- **`?checkout=1`로 어떤 기능도 열지 마라.** 이유: URL 하나로 유료 기능이 열린다. 쿼리 파라미터가 여는 것은 안내 문구뿐이다(ADR-020).
-- **결제 상태를 폴링하지 마라.** 이유: 웹훅은 보통 수 초 안에 도착하고 늦으면 새로고침이 답이다. 전용 폴링 라우트도 만들지 않기로 했다(ADR-020).
-- **`/billing/success` 같은 새 라우트를 만들지 마라.** 이유: 화면은 5개 고정이다.
-- **`/upgrade`를 모달로 만들지 마라.** 이유: 결제는 리다이렉트 흐름이다. 프로토타입이 모달인 것은 단일 HTML의 한계였을 뿐이다.
-- **`pro` 사용자에게 결제 CTA를 보여주지 마라.** 이유: 이중 결제를 시도한다.
-- **"업로드·분석 무제한"을 Pro 혜택으로 쓰지 마라.** 이유: 무료도 무제한이다. 오해를 만든다(ADR-007).
-- **"해지 후에도 데이터는 지우지 않습니다"를 빼지 마라.** 이유: ADR-008의 약속이고 결제 결정에 영향을 준다.
-- **앱 화면에 파스텔 color-block을 쓰지 마라.**
-- **마케팅 `PricingCard`를 여기서 재사용하지 마라.** 이유: 레이어가 다르다.
-- **`plan`을 클라이언트에서 읽거나 요청에서 받지 마라.**
-- **결제수단·영수증·취소 UI를 만들지 마라.** 이유: Polar Customer Portal에 위임했다.
-- **raw hex·raw px·이모지를 쓰지 마라.**
+- **`req.json()`을 서명 검증 전에 부르지 마라.** 이유: body가 소비돼 원문 검증이 깨진다.
+- **`@polar-sh/nextjs`의 `Webhooks`를 쓰지 마라.** 이유: 검증 실패에 403을 강제하고 성공 응답을 우리가 통제할 수 없다(D-14).
+- **검증 전에 파싱·DB 쓰기·로그 출력을 하지 마라.** 이유: 검증되지 않은 입력이다.
+- **`webhook_events` INSERT와 `profiles` 갱신을 나누지 마라 — 성능을 이유로도.** 이유: 크래시 시 이벤트가 처리됨으로 기록된 채 반영되지 않고, 재전송마저 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free(ADR-021).
+- **`subscription.canceled`에서 `free`로 내리지 마라.** 이유: 해지 예약일 뿐이고 결제한 기간이 남아 있다. 내리면 돈을 낸 사용자를 즉시 잠근다(D-11 · ADR-008).
+- **`unpaid`를 이벤트 타입으로 다루지 마라.** 이유: `subscription.unpaid` 이벤트는 존재하지 않는다. `subscription.updated`의 `data.status`로만 온다(D-12).
+- **RPC 실패에 200을 반환하지 마라.** 이유: Polar가 재전송하지 않으면 영원히 잃는다.
+- **순서 역전 방어를 타임스탬프 한 겹으로 끝내지 마라.** 이유: 재구독 시 옛 구독의 지연된 `revoked`가 새 구독을 죽인다.
+- **`past_due`에 우리 쪽 유예 타이머를 만들지 마라.** 이유: Polar가 `unpaid`/`revoked`를 보낼 때 잠근다.
+- **웹훅에서 `uploads`·`transactions`를 삭제·익명화하지 마라.** 이유: 재구독 시 그대로 다시 열려야 한다(ADR-008).
+- **`subscriptions` 테이블을 만들지 마라.**
+- **마이그레이션 파일을 만들지 마라.** 이유: `0008`은 step 1이 만들었다. 두 step이 같은 파일을 만들면 번호가 또 충돌한다.
+- **알 수 없는 이벤트에 4xx/5xx를 주지 마라.** 이유: 무한 재전송을 유발한다.
+- **웹훅 원문 body·customer ID·이메일을 로그에 남기지 마라.**
 - 기존 테스트를 깨뜨리지 마라.

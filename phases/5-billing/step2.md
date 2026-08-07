@@ -1,248 +1,223 @@
-# Step 2: polar-webhook
+# Step 2: billing-routes
 
 ## 목적
 
-`POST /api/webhook/polar` — 서명 검증된 웹훅으로 `profiles.plan`을 갱신한다.
+두 라우트를 만든다.
 
-**이것이 Pro 권한의 유일한 출처다**(ADR-020). 다른 어떤 경로도 `plan`을 `pro`로 바꾸지 않는다.
+- `POST /api/billing/checkout` — Polar Checkout 세션을 만들어 리다이렉트
+- `POST /api/billing/portal` — Polar Customer Portal 링크를 만들어 리다이렉트
 
-네 가지가 여기서 지켜져야 하고, **하나라도 틀리면 "결제는 성공했는데 영원히 Free"가 된다**:
+한 문장이 이 step의 전부다(ARCHITECTURE.md §Polar 결제):
 
-1. **원문 body 서명 검증이 가장 먼저** — 검증 전 JSON 파싱·DB 쓰기·로그 출력 금지
-2. **`webhook_events` INSERT와 `profiles` 갱신은 한 transaction** (ADR-021)
-3. **순서 역전 방어 2단** — `source_modified_at` + subscription ID 일치
-4. **구독 종료는 `plan`을 되돌릴 뿐 데이터를 건드리지 않는다** (ADR-008)
+> **요청의 product ID·user ID·return URL을 신뢰하지 않는다.**
+
+셋 다 서버가 정한다. 클라이언트가 보내는 것은 "결제하고 싶다"는 의사 표시뿐이다.
+
+## `@polar-sh/nextjs`의 `Checkout`·`CustomerPortal`을 쓰지 마라 ← D-15 · ADR-023
+
+이 step에서 가장 중요한 지시다. 두 헬퍼는 **정확히 이 step이 막으려는 것을 한다.**
+
+`node_modules/@polar-sh/nextjs/dist/index.js:18-45` — `Checkout`이 쿼리 파라미터에서 읽는 값:
+
+```
+products · customerId · customerExternalId · customerEmail · customerName
+customerBillingAddress · customerTaxId · customerIpAddress · discountId · metadata · seats
+```
+
+`?products=<남의-상품>&customerExternalId=<피해자-uid>` 가 그대로 통과한다. **ARCHITECTURE.md §Polar 결제 첫 줄을 문자 그대로 위반한다.**
+
+같은 파일 `:54` · `:89` · `:107` 의 `console.error(error)` 는 SDK 원본 에러 객체를 그대로 찍는다 — 고객 식별자·이메일·URL이 들어갈 수 있다. **AGENTS.md CRITICAL(로그 PII 금지) 위반이다.**
+
+**`@polar-sh/sdk`의 `Polar` 인스턴스를 step 0의 `getPolar()`로 받아 직접 호출하라.**
+`import { Checkout } from '@polar-sh/nextjs'` 를 쓰면 이 step은 실패다.
 
 ## 이전 Step과의 의존성
 
-- **step 0 (`polar-client`)** — `getWebhookSecret`. 그 step의 `summary`에 SDK API 이름과 `@polar-sh/nextjs` 헬퍼 유무가 있다
-- **step 1 (`billing-routes`)** — `external_customer_id`가 세션 `user.id`라는 계약
-- **Phase 0 step 3 (`db-schema`)** — `profiles`·`webhook_events` 테이블
-- **Phase 0 step 4** — `createServiceClient()` (웹훅에는 사용자 컨텍스트가 없다)
+- **step 0 (`polar-client`)** — `getPolar`·`getProductId`·`getSiteUrl`. 그 step의 `summary`에 **SDK 실제 API 이름**이 있다
+- **step 1 (`billing-schema`)** — 이 라우트들은 DB를 **쓰지 않는다.** 읽기만 한다. 관련은 "쓰지 않는다"는 계약뿐이다
+- **Phase 0 step 4 (`supabase-clients`)** — `server.ts`의 `getUser`, `service.ts`의 `getProfilePlan`·`profiles.polar_customer_id` 조회
+- **Phase 0 step 5 (`auth-flow`)** — 미들웨어. 하지만 **라우트도 스스로 인증을 확인한다**
 
 ## 읽어야 할 파일
 
-- `/docs/ARCHITECTURE.md` — **§Polar 결제 전문** · §Supabase 키 사용 규칙의 「Polar 웹훅」 행 · §DB 스키마의 `profiles`·`webhook_events`
-- `/docs/ADR.md` — **ADR-021 전문** · ADR-020 · ADR-008
-- `/docs/PRD.md` — UC-14 · UC-15 · §구독 종료 후 접근 정책
-- `/src/services/polar/client.ts` · `/src/app/api/billing/checkout/route.ts`
-- `/supabase/migrations/0001_schema.sql`
+- `/docs/ARCHITECTURE.md` — **§Polar 결제 전문**, 특히 처음 두 항목
+- `/docs/ADR.md` — ADR-007(Portal 위임) · ADR-020(권한의 source of truth · `/dashboard?checkout=1`) · ADR-021 · **ADR-023(SDK 헬퍼 미사용)**
+- `/phases/PLAN.md` — **D-15**(헬퍼 금지의 실측 근거)
+- `/docs/PRD.md` — UC-07 · UC-13
+- `/src/services/polar/client.ts` — step 0 산출물
+- `/phases/5-billing/index.json` — step 0의 `summary`
+- `/supabase/migrations/0001_schema.sql` — `profiles.polar_customer_id`(customer ID의 단일 출처)
 
 ## 구현 범위
 
 ```
-supabase/migrations/0005_polar_event_fn.sql   — plpgsql 함수 (멱등 기록 + plan 갱신을 한 transaction으로)
-src/app/api/webhook/polar/route.ts            — POST
+src/app/api/billing/checkout/route.ts   — POST
+src/app/api/billing/portal/route.ts     — POST
 ```
 
-**왜 plpgsql 함수인가**: Supabase JS 클라이언트는 여러 문장을 하나의 transaction으로 묶지 못한다. ADR-021이 요구하는 원자성을 만족하려면 DB 함수 하나로 내려야 한다.
-
-```sql
--- 시그니처 수준 스펙
-create or replace function apply_polar_event(
-  p_event_id text, p_event_type text, p_event_created_at timestamptz,
-  p_user_id uuid, p_plan text,
-  p_customer_id text, p_subscription_id text, p_modified_at timestamptz
-) returns text   -- 'applied' | 'duplicate' | 'stale' | 'subscription_mismatch'
-language plpgsql security definer as $$ … $$;
+```ts
+export const runtime = 'nodejs';
+export async function POST(req: Request): Promise<Response>;   // 303 리다이렉트 또는 { url }
 ```
 
 ## 수정 대상 파일
 
 ```
-supabase/migrations/0005_polar_event_fn.sql     (신규)
-src/app/api/webhook/polar/route.ts              (신규)
-src/app/api/webhook/polar/route.test.ts         (신규 — 먼저)
-supabase/migrations.test.ts                     (수정 — 새 마이그레이션 불변식 추가)
+src/app/api/billing/checkout/route.ts        (신규)
+src/app/api/billing/checkout/route.test.ts   (신규 — 먼저)
+src/app/api/billing/portal/route.ts          (신규)
+src/app/api/billing/portal/route.test.ts     (신규 — 먼저)
 ```
 
 ## 먼저 작성할 테스트
 
-### 서명 검증이 가장 먼저 ← 순서가 핵심
-1. **`req.text()`로 raw body를 받는다.** `req.json()`을 먼저 부르면 body가 소비돼 검증이 깨진다. 소스에서 `req.json()` 부재를 검사하라
-2. 서명이 없으면 401. **JSON 파싱을 시도하지 않는다** (파서 mock 호출 0회)
-3. 서명이 틀리면 401. DB mock 호출 0회
-4. **검증 실패 시 body를 로그에 남기지 않는다** — `console` spy로 body 문자열 부재 확인
-5. 서명이 맞을 때만 파싱한다
+`vi.mock('@/services/polar/client')`와 Supabase 모듈을 갈아끼운다.
 
-### 멱등 + 원자성 ← ADR-021
-6. 같은 `event_id`가 두 번 오면 두 번째는 **`duplicate`**이고 `profiles`가 안 바뀐다
-7. **`webhook_events` INSERT와 `profiles` UPDATE가 한 RPC 호출로 나간다.** 두 번의 개별 쿼리로 나가지 않음을 assert하라. 이게 ADR-021의 전부다
-8. RPC가 실패하면 **5xx를 반환한다** — Polar가 재전송하게 해야 한다. 200을 주면 영원히 잃는다
+### checkout — 인증
+1. 세션 없으면 401
+2. 미들웨어를 믿고 생략하지 않는다 (라우트 단독 호출 테스트)
 
-### 순서 역전 방어 2단 ← ARCHITECTURE.md
-9. `modified_at`이 저장된 `source_modified_at`보다 **오래되면 무시**한다 (`stale`)
-10. `modified_at`이 같거나 새로우면 적용한다
-11. **subscription ID가 `profiles.polar_subscription_id`와 다르면 무시**한다 (`subscription_mismatch`) — 재구독 시 옛 구독의 지연된 `revoked`가 새 구독을 죽이는 것을 막는다
-12. 단, 현재 `polar_subscription_id`가 `null`이면(첫 구독) 통과한다
-13. 무시된 이벤트도 **`webhook_events`에는 기록된다** (재전송에 다시 처리하지 않기 위해)
+### checkout — 요청을 신뢰하지 않는다 ← 이 step의 핵심
+3. **요청 본문의 `productId`를 무시한다.** `{ productId: '남의-상품' }`을 보내도 `getProductId()` 값이 쓰인다
+4. **요청 본문의 `userId`/`customerId`를 무시한다.** `external_customer_id`가 **세션의 user.id**다
+5. **요청 본문의 `returnUrl`/`successUrl`을 무시한다.** return URL이 `getSiteUrl() + '/dashboard?checkout=1'`이다
+6. `?next=https://evil.com`을 붙여도 외부 URL이 안 나간다
+7. **`?products=...&customerExternalId=...` 쿼리를 붙여도 무시된다** ← D-15가 막는 정확한 공격 모양
+8. **가격·금액을 요청에서 읽지 않는다** — Polar 상품 설정이 청구 source of truth다(PRD)
 
-### 이벤트 → plan 매핑
-14. 구독 활성(`active`) → `plan: 'pro'`
-15. `past_due` → **`pro` 유지**. 우리 쪽 유예 타이머를 만들지 않는다(ARCHITECTURE.md)
-16. `unpaid` → `plan: 'free'`
-17. `revoked`/`canceled` 확정 → `plan: 'free'`
-18. 알 수 없는 이벤트 타입 → **200을 반환하고 아무것도 안 한다.** 재전송을 유발하지 마라
+### checkout — SDK 헬퍼 미사용 ← D-15
+9. **소스에 `@polar-sh/nextjs` import가 없다.** 두 라우트 파일 모두 검사하라
 
-### 사용자 연결
-19. `external_customer_id`로 `profiles.user_id`를 찾는다
-20. 찾을 수 없으면 **200을 반환한다** (재전송해도 못 찾는다) 그리고 로그에 코드만 남긴다
-21. `polar_customer_id`를 `profiles`에 저장한다 (없었으면)
+### checkout — 동작
+10. 이미 `plan === 'pro'`면 checkout을 만들지 않고 `/dashboard`로 보낸다 (중복 구독 방지)
+11. `profiles.polar_customer_id`가 있으면 그 customer로 연결한다 — 재구독 시 새 customer가 생기면 안 된다
+12. Polar SDK가 던지면 502 + `{ error: 'upstream' }` (고정 어휘)
+13. 성공 시 checkout URL로 리다이렉트한다
 
-### 데이터를 건드리지 않는다 ← ADR-008
-22. **어떤 경로에서도 `uploads`·`transactions`를 삭제·수정하지 않는다.** 두 테이블에 대한 mock 호출 0회를 assert하라. 이 테스트 하나가 ADR-008을 지킨다
-23. `free`로 되돌릴 때도 마찬가지다
+### portal
+14. 세션 없으면 401
+15. `polar_customer_id`가 없으면 **404 또는 400** — 결제한 적 없는 사용자에게 포털이 없다. 여기서 customer를 새로 만들지 마라
+16. 있으면 포털 세션을 만들어 리다이렉트한다
+17. 요청의 `customerId`를 무시하고 **DB의 값**을 쓴다. 이게 뚫리면 남의 결제 정보를 본다
+18. SDK 실패 시 502 + `upstream`
+
+### 권한을 열지 않는다 ← ADR-020 (G3)
+19. **두 라우트 어디에서도 `profiles.plan`을 바꾸지 않는다.** Supabase update mock이 **호출되지 않음**을 assert하라. plan은 **검증된 웹훅 transaction 안에서만** 바뀐다
+20. **`profiles`에 어떤 쓰기도 하지 않는다** — `polar_customer_id` 저장도 웹훅의 몫이다
 
 ### 로깅
-24. **웹훅 원문 body가 로그에 없다**(AGENTS.md CRITICAL)
-25. 이메일·customer ID가 로그에 없다
-26. 남기는 것은 이벤트 타입과 처리 결과 코드뿐이다
-
-### 마이그레이션 불변식 (`migrations.test.ts` 추가)
-27. `apply_polar_event` 함수에 `webhook_events` INSERT와 `profiles` UPDATE가 **둘 다** 있다
-28. 함수에 `uploads`·`transactions`에 대한 DELETE/UPDATE가 **없다**
-29. `subscriptions` 테이블을 만들지 않는다
+21. 토큰·고객 식별자·이메일이 로그에 없다
+22. SDK 에러 객체를 그대로 로그에 넣지 않는다 — 코드만 남긴다
 
 ## Codex 실행 지시문
 
-### 서명 검증 전에는 아무것도 하지 마라
+### 요청에서 읽는 것은 아무것도 없다
 
 ```ts
-export async function POST(req: Request) {
-  const raw = await req.text();                    // ✅ raw body 먼저
-  const sig = req.headers.get('webhook-signature'); // 실제 헤더 이름은 SDK 문서/타입 확인
-  if (!verify(raw, sig, getWebhookSecret())) {
-    return new Response(null, { status: 401 });     // 로그에 raw 를 남기지 마라
-  }
-  const event = JSON.parse(raw);                    // 여기서야 파싱
-  …
-}
+// checkout
+const { data: { user } } = await getUser();          // 세션에서
+const productId = getProductId();                    // 환경변수에서
+const returnUrl = `${getSiteUrl()}/dashboard?checkout=1`;   // 서버가 구성
+
+// 요청 본문을 파싱조차 하지 마라 — 읽을 것이 없다.
 ```
 
-ARCHITECTURE.md: *"웹훅은 **원문 body 서명 검증을 가장 먼저** 한다. 검증 전 JSON 파싱·DB 쓰기·로그 출력 금지 (`await req.text()`로 raw body를 받아야 하며, 먼저 `req.json()`을 호출하면 검증이 깨진다)."*
+본문을 파싱하지 않으면 신뢰할 것도 없다. **가장 단순한 방어다.**
 
-`@polar-sh/nextjs`가 웹훅 핸들러 팩토리를 제공한다면 써도 된다 — 단 **그것이 raw body로 검증하는지 소스/타입에서 확인하고** `summary`에 남겨라.
+### `external_customer_id`가 연결 고리다
 
-### 한 transaction — plpgsql로 내려라
+웹훅(step 3)이 이 값으로 우리 사용자를 찾는다. **반드시 `user.id`(Supabase auth uid)여야 한다.** 이메일이나 다른 식별자를 쓰지 마라 — 이메일은 바뀔 수 있다.
 
-```ts
-const { data, error } = await supabase.rpc('apply_polar_event', { … });
-if (error) return new Response(null, { status: 500 });   // Polar 가 재전송한다
-```
+### customer ID의 단일 출처
 
-ADR-021: *"분리하면 크래시 시 이벤트가 *처리됨*으로 기록된 채 반영되지 않고, Polar의 재전송마저 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free."*
+ARCHITECTURE.md §DB 스키마: `polar_customer_id text unique, -- customer ID의 단일 출처`
 
-**`webhook_events` INSERT를 먼저 하고 `profiles`를 나중에 업데이트하는 두 쿼리로 만들지 마라.** 성능을 이유로도 분리하지 마라 — ADR이 명시적으로 금지했다.
+이미 있으면 그것을 쓰고, 없으면 Polar가 만들게 둔 뒤 **웹훅이 저장한다.** 이 라우트에서 `profiles`에 쓰지 마라 — 쓰기 주체를 하나로 유지한다. (D-16에 따라 service_role은 애초에 `profiles` UPDATE 권한이 없다 — 시도하면 권한 에러가 난다. 그게 의도다.)
 
-함수 안 순서:
-1. `insert into webhook_events (event_id, …) on conflict do nothing` → 삽입된 행이 0이면 `duplicate` 반환
-2. `profiles`를 `for update`로 잠그고 `source_modified_at`·`polar_subscription_id` 검사
-3. 통과하면 `plan`·`polar_customer_id`·`polar_subscription_id`·`source_modified_at` 갱신
-4. 결과 코드 반환
+### return URL은 `/dashboard?checkout=1` 하나
 
-**1번이 먼저인 것이 멱등의 핵심이다.** 같은 transaction 안이므로 3번이 실패하면 1번도 롤백된다.
+ADR-020:
 
-### 순서 역전 방어는 2단이다
+> return URL은 서버가 구성하며 `/dashboard?checkout=1`이다. … **쿼리 파라미터가 여는 것은 안내 문구지 기능이 아니다.** 전용 성공 페이지와 상태 폴링 라우트는 두지 않는다.
 
-ARCHITECTURE.md: *"순서 역전 방어 2단: `modified_at`이 저장된 `source_modified_at`보다 오래되면 무시 **+ subscription ID가 현재 값과 일치하는지 확인**(재구독 시 옛 구독의 지연된 `revoked`가 새 구독을 죽이는 것을 막는다)."*
+`/billing/success` 페이지를 만들지 마라. `/api/billing/status` 폴링 라우트를 만들지 마라.
 
-타임스탬프만으로는 부족하다. 시나리오: 사용자가 해지 → 재구독. 옛 구독의 `revoked`가 새 구독의 `active`보다 늦게 도착하면, 타임스탬프는 `revoked`가 더 새로울 수 있다(발생 시각이 아니라 전송 순서 문제). subscription ID가 다르면 무시해야 한다.
+### `plan`을 여기서 바꾸지 마라
 
-### `past_due`는 Pro 유지
+ADR-020: *"success URL·checkout ID·클라이언트 응답은 권한 근거가 아니다. `profiles.plan`은 검증된 웹훅 transaction 안에서만 바뀐다."*
 
-ARCHITECTURE.md: *"`past_due`는 Polar가 `unpaid`/`revoked`를 보낼 때까지 Pro 유지. **우리 쪽 유예 타이머를 만들지 않는다**."*
+이 라우트에서 낙관적으로 `pro`로 바꾸고 싶어질 것이다. **바꾸지 마라.** 결제가 실패해도 Pro가 되고, 그걸 되돌릴 웹훅이 안 올 수도 있다.
 
-`past_due` 이벤트에 "3일 뒤 잠금" 같은 로직을 넣지 마라. Polar가 판단한다.
+### portal은 customer를 만들지 않는다
 
-### 구독 종료가 데이터를 건드리지 않는다
+`polar_customer_id`가 없다는 건 **결제한 적이 없다는 뜻**이다. 포털에 보여줄 게 없다. customer를 새로 만들어 빈 포털을 열지 마라 — 사용자가 혼란스럽고 Polar에 유령 customer가 쌓인다.
 
-ARCHITECTURE.md: *"**구독 종료는 `profiles.plan`을 `free`로 되돌릴 뿐 데이터를 건드리지 않는다.** 웹훅 핸들러에서 `uploads`·`transactions`를 삭제하거나 익명화하지 마라 — 재구독 시 그대로 다시 열려야 한다."*
+화면(`/upgrade`·대시보드)이 `plan === 'free'`면 포털 링크를 아예 안 보여주는 것이 정답이다.
 
-이걸 "정리"라고 생각해서 넣지 마라. 재구독 사용자에게 재분석을 강요해 우리 원가를 태우고, 세무 자료를 잃은 사용자에게 신뢰를 잃는다(ADR-008).
+### 결제수단·영수증 UI를 만들지 마라
 
-### 알 수 없는 이벤트에 200
-
-Polar가 우리가 모르는 이벤트를 보낼 수 있다. **200을 주고 무시하라.** 4xx/5xx를 주면 Polar가 계속 재전송한다.
-
-### 로깅
-
-```ts
-// ✅ console.info(JSON.stringify({ event: 'polar_webhook', type, result }));
-// ❌ console.log(raw)  · console.error(event)  · console.log(customerId)
-```
-
-AGENTS.md CRITICAL: *"로그에 PII를 남기지 마라. … 웹훅 원문 body 금지."*
-
-### `service role`을 쓴다
-
-웹훅에는 사용자 컨텍스트가 없다. **서명 검증이 유일한 관문이다**(ARCHITECTURE.md §Supabase 키 사용 규칙).
-
-### `subscriptions` 테이블을 만들지 마라
-
-ADR-021. 앱이 묻는 질문은 "Pro인가" 하나다.
+PRD: *"결제수단·영수증·취소 UI는 만들지 않는다 — Polar Customer Portal에 위임."*
 
 ## 완료 조건
 
-- 마이그레이션 + 라우트 + 테스트가 존재하고 29개 항목이 전부 통과한다
-- `req.json()`이 소스에 없다 (raw body 검증)
-- 검증 실패 시 파싱·DB·로그가 없다
-- 멱등 기록과 `plan` 갱신이 **한 RPC 호출**이다
-- 순서 역전 방어 2단이 있다
-- `past_due`가 Pro를 유지한다
-- **`uploads`·`transactions`를 건드리지 않는다**
-- 알 수 없는 이벤트에 200
-- 로그에 body·customer ID가 없다
+- 두 라우트 + 테스트가 존재하고 22개 항목이 전부 통과한다
+- **`@polar-sh/nextjs`를 import하지 않는다** (D-15)
+- checkout이 요청 본문을 신뢰하지 않는다 (파싱조차 안 하는 것이 이상적)
+- `external_customer_id`가 세션의 `user.id`다
+- return URL이 `getSiteUrl()` 기반이다
+- **두 라우트 어디에서도 `profiles`에 쓰지 않는다**
+- portal이 customer를 새로 만들지 않는다
+- 에러가 고정 어휘다
 - `npm run lint && npm run build && npm run test` 통과
 
 ## 검증 명령
 
 ```bash
 npm run lint && npm run build && npm run test
-npx vitest run src/app/api/webhook/polar/route.test.ts supabase/migrations.test.ts
+npx vitest run src/app/api/billing
 ```
 
 직접 확인:
 
 ```bash
-grep -n "req.json()" src/app/api/webhook/polar/route.ts && echo "FAIL: 서명 검증이 깨진다" || echo "OK"
-grep -nE "uploads|transactions" src/app/api/webhook/polar/route.ts supabase/migrations/0005_*.sql && echo "FAIL: 데이터를 건드린다" || echo "OK"
-grep -c "rpc(" src/app/api/webhook/polar/route.ts    # 1 이어야 한다
-grep -nE "setTimeout|유예|grace" src/app/api/webhook/polar/route.ts && echo "FAIL: 유예 타이머" || echo "OK"
+grep -rn "@polar-sh/nextjs" src/app/api/billing/ && echo "FAIL: D-15 위반" || echo "OK"
+grep -rnE "req\.json\(\)|searchParams" src/app/api/billing/checkout/route.ts && echo "확인 필요: 요청에서 무언가 읽는다" || echo "OK"
+grep -rn "plan" src/app/api/billing/*/route.ts | grep -iE "update|upsert|set" && echo "FAIL: 라우트가 plan 을 바꾼다" || echo "OK"
+grep -rnE "\.from\(.profiles.\)\s*\.\s*(update|upsert|insert)" src/app/api/billing/ && echo "FAIL: profiles 쓰기" || echo "OK"
+ls src/app/billing 2>/dev/null && echo "FAIL: 전용 성공 페이지" || echo "OK"
 ```
 
 ## 검증 절차
 
 1. 위 AC 커맨드를 실행한다.
 2. 아키텍처 체크리스트:
-   - ARCHITECTURE.md §Polar 결제 — 서명 검증이 가장 먼저인가? 한 transaction인가? 순서 역전 2단인가? `past_due`가 Pro 유지인가?
-   - ADR-021 — `webhook_events` INSERT와 `profiles` 갱신이 나뉘지 않았는가? `subscriptions` 테이블이 없는가?
-   - ADR-008 — `uploads`·`transactions`를 건드리지 않는가?
-   - ADR-020 — 이곳이 `plan`을 바꾸는 유일한 경로인가?
-   - AGENTS.md CRITICAL — 로그에 웹훅 body가 없는가? service role을 쓰는가?
-   - 마이그레이션에 `DROP TABLE`이 없는가?
+   - ARCHITECTURE.md §Polar 결제 — 요청의 product ID·user ID·return URL을 신뢰하지 않는가?
+   - ADR-023 / D-15 — `Checkout`·`CustomerPortal` 헬퍼를 안 썼는가?
+   - ADR-020 (G3) — `plan`을 웹훅 밖에서 바꾸지 않는가? 전용 성공 페이지·폴링 라우트를 안 만들었는가?
+   - ADR-007 — 결제수단·영수증·취소 UI를 안 만들었는가?
+   - ARCHITECTURE.md §디렉토리 구조 — `api/billing/{checkout,portal}/route.ts` 위치인가?
+   - AGENTS.md CRITICAL — 외부 SDK 호출이 라우트 안에만 있는가? 에러가 고정 어휘인가? 로그에 PII 없는가?
 3. 결과에 따라 `phases/5-billing/index.json`의 step 2를 업데이트한다:
-   - 성공 → `"status": "completed"`, `"summary"` 한 줄 (예: "migrations/0005_polar_event_fn.sql의 apply_polar_event() plpgsql(webhook_events on conflict do nothing → profiles for update → 검증 → 갱신, 결과 코드 applied/duplicate/stale/subscription_mismatch) + api/webhook/polar/route.ts. req.text() 원문 서명 검증 최우선, 단일 RPC, 순서 역전 2단(source_modified_at + subscription id), past_due는 pro 유지, uploads/transactions 미접촉, 알 수 없는 이벤트는 200")
+   - 성공 → `"status": "completed"`, `"summary"` 한 줄 (예: "app/api/billing/{checkout,portal}/route.ts — @polar-sh/nextjs 헬퍼 미사용(SDK 직접 호출). checkout은 요청 본문을 읽지 않고 productId=env·external_customer_id=session user.id·returnUrl=getSiteUrl()+/dashboard?checkout=1, 이미 pro면 대시보드로. portal은 DB의 polar_customer_id만 쓰고 없으면 거절(customer 생성 안 함). 두 라우트 모두 profiles에 쓰지 않는다")
    - 3회 실패 → `"status": "error"` + `"error_message"`
    - 사람 개입 필요 → `"status": "blocked"` + `"blocked_reason"` 후 중단
-4. `summary`에 **마이그레이션 0005를 DB에 적용해야 한다**는 사실을 남겨라.
 
 ## commit 기준
 
-`feat(5-billing): step 2 — polar-webhook`
+`feat(5-billing): step 2 — billing-routes`
 
-포함: `supabase/migrations/0005_polar_event_fn.sql` · `src/app/api/webhook/polar/route.{ts,test.ts}` · `supabase/migrations.test.ts`
+포함: `src/app/api/billing/**`
 
 ## 금지사항
 
-- **`req.json()`을 서명 검증 전에 부르지 마라.** 이유: body가 소비돼 원문 검증이 깨진다.
-- **검증 전에 파싱·DB 쓰기·로그 출력을 하지 마라.** 이유: 검증되지 않은 입력이다.
-- **`webhook_events` INSERT와 `profiles` 갱신을 나누지 마라 — 성능을 이유로도.** 이유: 크래시 시 이벤트가 처리됨으로 기록된 채 반영되지 않고, 재전송마저 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free(ADR-021).
-- **RPC 실패에 200을 반환하지 마라.** 이유: Polar가 재전송하지 않으면 영원히 잃는다.
-- **순서 역전 방어를 타임스탬프 한 겹으로 끝내지 마라.** 이유: 재구독 시 옛 구독의 지연된 `revoked`가 새 구독을 죽인다.
-- **`past_due`에 우리 쪽 유예 타이머를 만들지 마라.** 이유: Polar가 `unpaid`/`revoked`를 보낼 때 잠근다.
-- **웹훅에서 `uploads`·`transactions`를 삭제·익명화하지 마라.** 이유: 재구독 시 그대로 다시 열려야 한다. 재분석을 강요하면 우리 원가를 태우고 신뢰를 잃는다(ADR-008).
-- **`subscriptions` 테이블을 만들지 마라.**
-- **알 수 없는 이벤트에 4xx/5xx를 주지 마라.** 이유: 무한 재전송을 유발한다.
-- **웹훅 원문 body·customer ID·이메일을 로그에 남기지 마라.**
-- **마이그레이션에 `DROP TABLE`을 쓰지 마라.**
+- **`@polar-sh/nextjs`의 `Checkout`·`CustomerPortal`을 쓰지 마라.** 이유: 쿼리 파라미터(`products`·`customerExternalId` 등 11개)를 그대로 신뢰하고 `console.error`로 원본 에러를 남긴다. 이 step의 존재 이유를 정면으로 무효화한다(D-15 · ADR-023).
+- **요청 본문·쿼리에서 product ID·user ID·return URL·가격을 읽지 마라.** 이유: 하나라도 신뢰하면 누구나 임의 상품·임의 사용자·임의 리다이렉트를 만들 수 있다.
+- **이 라우트에서 `profiles`에 쓰지 마라 (`plan`·`polar_customer_id` 모두).** 이유: success URL·checkout ID·클라이언트 응답은 권한 근거가 아니다. 쓰기 주체는 웹훅 하나다(ADR-020 · D-16).
+- **`/billing/success` 페이지를 만들지 마라.**
+- **`/api/billing/status` 폴링 라우트를 만들지 마라.** 이유: 웹훅은 보통 수 초 안에 도착하고, 늦으면 새로고침이 답이다(ADR-020).
+- **portal에서 customer를 새로 만들지 마라.** 이유: 결제한 적 없는 사용자에게 빈 포털을 열면 혼란스럽고 Polar에 유령 customer가 쌓인다.
+- **결제수단·영수증·취소 UI를 만들지 마라.** 이유: Polar Customer Portal에 위임했다(ADR-007).
+- **다단계 요금제·쿠폰·프로모션 코드를 만들지 마라.** 이유: 단일 상품 월 구독이다.
+- **에러 어휘를 늘리지 마라.**
+- **로그에 토큰·고객 식별자·이메일·SDK 에러 객체를 남기지 마라.**
 - 기존 테스트를 깨뜨리지 마라.

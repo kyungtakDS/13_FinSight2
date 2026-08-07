@@ -49,6 +49,7 @@
 
 ### ADR-008: 구독 종료는 화면을 잠글 뿐 데이터를 지우지 않는다
 **결정**: 해지·결제 실패·만료 시 `profiles.plan`을 `free`로 되돌려 유료 화면(전체 내역·다운로드)을 다시 잠근다. `uploads`·`transactions`·리포트는 손대지 않는다. 무료 화면은 과거 분석 전부에 대해 계속 열리고, 이미 다운로드한 파일은 회수하지 않는다.
+**'종료'가 언제인가 (2026-08-07 명확화)**: **해지 *예약*(`subscription.canceled`)은 잠그지 않는다. 결제한 기간 끝의 `subscription.revoked`가 잠근다.** 위 문장의 "해지"를 예약 시점으로 읽으면 이번 달 요금을 낸 사용자를 버튼 누른 즉시 잠그게 되는데, 그건 이 ADR이 막으려던 것과 같은 종류의 배신이다. `past_due`도 잠그지 않는다 — Polar가 `unpaid`/`revoked`로 넘길 때까지 Pro다.
 **이유**: ADR-007의 게이트는 **화면에 걸리는 것이지 데이터에 걸리는 것이 아니다.** 구독 종료를 데이터 파기로 처리하면 재구독 사용자에게 재분석을 강요해 우리 원가를 태우고, 세무 자료를 잃은 사용자에게 신뢰를 잃는다. 데이터를 지우는 주체는 사용자의 삭제 요청·계정 삭제·90일 만료(ADR-005)뿐이라는 규칙이 하나로 유지된다.
 **트레이드오프**: 결제하지 않는 사용자의 데이터를 계속 보관하므로 저장 비용과 유출 시 피해 범위가 유지된다. 90일 만료가 이 증가를 상한한다.
 
@@ -127,11 +128,17 @@
 **결정**: `webhook_events` INSERT와 `profiles` 갱신(`plan` · `polar_subscription_id` · `source_modified_at`)을 하나의 transaction으로 묶는다. 성능을 이유로 분리하지 않는다. **별도 `subscriptions` 테이블을 만들지 않는다.**
 **이유**: 분리하면 크래시 시 이벤트가 *처리됨*으로 기록된 채 반영되지 않고, Polar의 재전송마저 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free. 구독 테이블을 두지 않는 이유는 앱이 묻는 질문이 **"이 사용자가 Pro인가" 하나뿐**이기 때문이다 — 결제수단·영수증·다음 청구일은 ADR-007에서 Polar Customer Portal에 위임했으므로 우리가 미러링할 화면이 없다. 순서 역전 방어에 실제로 필요한 두 필드만 `profiles`에 둔다.
 **트레이드오프**: 나중에 청구 이력을 우리 화면에서 보여주려면 테이블을 다시 만들어야 한다. 그때는 Polar API 조회로 먼저 해보고, 그래도 부족하면 만든다.
+**구현 (2026-08-07)**: 원자성의 구현체는 `supabase/migrations/0008_polar_event_fn.sql`의 `apply_polar_event()` plpgsql 하나다 — Supabase JS 클라이언트는 여러 문장을 한 transaction으로 묶지 못하므로 DB 함수로 내려야 한다. 함수는 `security definer`이고 **`service_role`은 그 함수의 EXECUTE만 갖는다** — `profiles` UPDATE 권한을 주지 않으므로 ADR-020의 "유일한 경로"가 규율이 아니라 권한으로 강제된다. 같은 레포의 `0007_upload_recompute.sql`의 `replace_upload_result()`가 선례다.
 
 ### ADR-022: 모델은 Claude Opus 5
 **결정**: `claude-opus-5`를 `effort: medium`으로 사용한다.
 **이유**: 처음 보는 가맹점 상호에서 업종을 추론하고 낯선 CSV 헤더 구조를 판정하는 일은 정확도가 곧 제품 품질이다. ADR-001의 캐시 구조 덕분에 호출 빈도 자체가 낮아, 상위 모델을 써도 총액 영향이 작다.
 **트레이드오프**: Sonnet 5 대비 토큰 단가가 약 1.7배다. 캐시 히트율이 기대보다 낮게 나오면 재검토한다.
+
+### ADR-023: Polar SDK의 프레임워크 헬퍼를 쓰지 않고 SDK를 직접 부른다
+**결정**: `@polar-sh/nextjs`의 `Checkout`·`CustomerPortal`·`Webhooks`를 쓰지 않는다. `@polar-sh/sdk`를 직접 호출하고, 웹훅 서명 검증은 `@polar-sh/sdk/webhooks`의 `validateEvent`를 직접 부른다.
+**이유**: 설치본(`@polar-sh/nextjs@0.9.6`) 실측이다. ① `Checkout`(`dist/index.js:18-45`)이 `products`·`customerId`·`customerExternalId`·`customerEmail`·`discountId`·`metadata` 등 **11개를 쿼리 파라미터에서 읽는다** — ARCHITECTURE.md §Polar 결제의 "요청의 product ID·user ID·return URL을 신뢰하지 않는다"를 문자 그대로 위반하고, `?products=<남의-상품>&customerExternalId=<피해자>` 가 그대로 통과한다. ② 세 헬퍼 모두 `console.error(error)`(`:54`·`:89`·`:107`)로 SDK 원본 에러 객체를 남긴다 — 고객 식별자·이메일이 들어갈 수 있어 로그 PII 금지 규칙을 깬다. ③ `Webhooks`는 raw body 검증 자체는 올바르지만 검증 실패에 403을 강제하고 성공 응답을 통제할 수 없다 — RPC 실패에 **우리가 5xx를 반환해야** Polar가 재전송한다.
+**트레이드오프**: checkout 세션 생성·포털 링크·서명 검증을 우리가 쓴다 — 헬퍼가 대신했을 코드가 라우트 3개에 늘어난다. 대신 신뢰 경계가 우리 코드 안에 있어 테스트로 강제할 수 있다(게이트 G3·G4). SDK 업그레이드 시 헬퍼의 입력 신뢰 범위가 조용히 바뀌어도 우리는 영향을 받지 않는다.
 
 ---
 

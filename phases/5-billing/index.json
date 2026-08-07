@@ -3,8 +3,9 @@
   "phase": "5-billing",
   "steps": [
     { "step": 0, "name": "polar-client", "status": "pending" },
-    { "step": 1, "name": "billing-routes", "status": "pending" },
-    { "step": 2, "name": "polar-webhook", "status": "pending" },
-    { "step": 3, "name": "upgrade-page", "status": "pending" }
+    { "step": 1, "name": "billing-schema", "status": "pending" },
+    { "step": 2, "name": "billing-routes", "status": "pending" },
+    { "step": 3, "name": "polar-webhook", "status": "pending" },
+    { "step": 4, "name": "upgrade-page", "status": "pending" }
   ]
 }

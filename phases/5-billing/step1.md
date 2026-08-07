@@ -1,195 +1,253 @@
-# Step 1: billing-routes
+# Step 1: billing-schema
 
 ## 목적
 
-두 라우트를 만든다.
+Polar 웹훅이 쓸 **DB 계약을 먼저 굳힌다.** `supabase/migrations/0008_polar_event_fn.sql` 하나와 그것을 지키는 불변식 테스트가 전부다.
 
-- `POST /api/billing/checkout` — Polar Checkout 세션을 만들어 리다이렉트
-- `POST /api/billing/portal` — Polar Customer Portal 링크를 만들어 리다이렉트
+**이 step은 TypeScript를 한 줄도 쓰지 않는다.** 라우트는 step 2·3이다.
 
-한 문장이 이 step의 전부다(ARCHITECTURE.md §Polar 결제):
+왜 따로 떼어냈나: 마이그레이션과 라우트를 한 step에서 하면 SQL이 3회 실패했을 때 라우트까지 통째로 `error`가 되고, 무엇보다 **라우트가 RPC 시그니처를 추측하게 된다.** 계약이 먼저 있어야 그 위에 얹을 수 있다.
 
-> **요청의 product ID·user ID·return URL을 신뢰하지 않는다.**
+## 마이그레이션 번호는 `0008`이다 ← D-17
 
-셋 다 서버가 정한다. 클라이언트가 보내는 것은 "결제하고 싶다"는 의사 표시뿐이다.
+`supabase/migrations/`에 **0001~0007이 이미 있다.**
+
+| 번호 | 파일 | 출처 |
+|---|---|---|
+| 0001~0004 | `schema` · `rls` · `storage` · `expiry_cron` | Phase 0 (PR #10) |
+| 0005 | `grants` | PR #21 |
+| 0006 | `upload_error_detail` | PR #26 |
+| 0007 | `upload_recompute` | PR #39 |
+
+**옛 계획 문서가 예약했던 `0005_polar_event_fn.sql`은 이미 `0005_grants.sql`이 쓰고 있다.**
+`0008`을 쓴다. 다른 번호를 고르지 마라.
+
+착수 전에 직접 확인하라:
+
+```bash
+ls supabase/migrations/ | tail -1     # 0007_upload_recompute.sql 이어야 한다
+```
+
+`0008`보다 큰 번호가 이미 있으면 그 다음 번호를 쓰고, **`phases/PLAN.md` D-17을 고쳐라.**
 
 ## 이전 Step과의 의존성
 
-- **step 0 (`polar-client`)** — `getPolar`·`getProductId`·`getSiteUrl`. 그 step의 `summary`에 **SDK 실제 API 이름**이 있다
-- **Phase 0 step 4 (`supabase-clients`)** — `server.ts`의 `getUser`, `service.ts`의 `getProfilePlan`·`profiles.polar_customer_id` 조회
-- **Phase 0 step 5 (`auth-flow`)** — 미들웨어. 하지만 **라우트도 스스로 인증을 확인한다**
+- **step 0 (`polar-client`)** — 직접 쓰는 것은 없다. 이 step은 SQL만 만진다
+- **Phase 0 step 3 (`db-schema`)** — `profiles`(`plan`·`polar_customer_id`·`polar_subscription_id`·`source_modified_at`) · `webhook_events`(`event_id` pk) 테이블이 이미 있다. **테이블을 새로 만들지 마라**
+- **`6-integrity` step 14 (`upload-recompute`)** — `0007_upload_recompute.sql`의 `replace_upload_result()`가 **이 step이 따를 형판이다.** security definer · 빈 `search_path` · `create or replace` 뒤의 `revoke` · `service_role`에만 `grant execute`
 
 ## 읽어야 할 파일
 
-- `/docs/ARCHITECTURE.md` — **§Polar 결제 전문**, 특히 처음 두 항목
-- `/docs/ADR.md` — ADR-007(Portal 위임) · ADR-020(권한의 source of truth · `/dashboard?checkout=1`) · ADR-021
-- `/docs/PRD.md` — UC-07 · UC-13
-- `/src/services/polar/client.ts` — step 0 산출물
-- `/phases/5-billing/index.json` — step 0의 `summary`
-- `/supabase/migrations/0001_schema.sql` — `profiles.polar_customer_id`(customer ID의 단일 출처)
+- `/supabase/migrations/0007_upload_recompute.sql` — **형판. 이 파일의 구조를 그대로 따라라**
+- `/supabase/migrations/0005_grants.sql` — 권한 원칙. *"getProfilePlan() — plan 조회만. plan 갱신은 Phase 5 웹훅의 몫이라 아직 없다"* 가 이 step이 채우는 공백이다
+- `/supabase/migrations/0001_schema.sql` — `profiles` · `webhook_events` 컬럼
+- `/supabase/migrations/0002_rls.sql` — `webhook_events`는 RLS 활성 + 정책 0개(deny-all)다
+- `/supabase/migrations.test.ts` — 불변식 테스트 형식. `describe("upload recompute")` 블록이 형판이다
+- `/supabase/README.md` — 적용 순서
+- `/docs/ADR.md` — **ADR-021 전문** · ADR-020 · ADR-008 · ADR-016
+- `/docs/ARCHITECTURE.md` — §Polar 결제 · §Supabase 키 사용 규칙
+- `/phases/PLAN.md` — **D-16 · D-17**
 
 ## 구현 범위
 
 ```
-src/app/api/billing/checkout/route.ts   — POST
-src/app/api/billing/portal/route.ts     — POST
+supabase/migrations/0008_polar_event_fn.sql   (신규)
+supabase/migrations.test.ts                   (수정 — 불변식 추가)
 ```
 
-```ts
-export const runtime = 'nodejs';
-export async function POST(req: Request): Promise<Response>;   // 303 리다이렉트 또는 { url }
+### 함수 시그니처
+
+```sql
+create or replace function public.apply_polar_event(
+  p_event_id          text,
+  p_event_type        text,
+  p_event_created_at  timestamptz,
+  p_user_id           uuid,
+  p_plan              text,          -- 'free' | 'pro'
+  p_customer_id       text,
+  p_subscription_id   text,
+  p_modified_at       timestamptz
+) returns text                       -- 'applied' | 'duplicate' | 'stale' | 'subscription_mismatch'
+language plpgsql
+security definer
+set search_path = ''
+as $$ … $$;
 ```
 
-## 수정 대상 파일
+**반환 어휘 4개를 늘리지 마라.** step 3의 라우트가 이 값들로 분기한다.
 
+### 함수 본문의 순서 — 이 순서가 멱등성의 전부다
+
+1. `insert into public.webhook_events (event_id, event_type, event_created_at) values (…) on conflict (event_id) do nothing`
+   → 삽입된 행이 0이면 **`duplicate`를 반환하고 끝낸다**
+2. `select … from public.profiles where user_id = p_user_id for update` — **행을 잠근다**
+3. 순서 역전 검사 2단:
+   - `p_modified_at`이 저장된 `source_modified_at`보다 **오래되면** → `stale` 반환
+   - `polar_subscription_id`가 `null`이 **아니고** `p_subscription_id`와 다르면 → `subscription_mismatch` 반환
+4. 통과하면 `plan` · `polar_customer_id` · `polar_subscription_id` · `source_modified_at` 갱신 → `applied`
+
+**1번이 먼저인 것이 핵심이다.** 같은 transaction 안이므로 4번이 실패하면 1번도 롤백된다.
+`stale`·`subscription_mismatch`로 끝나도 **1번의 기록은 남는다** — 재전송이 다시 처리되지 않게 하려는 것이다.
+
+### 권한 블록 ← D-16
+
+```sql
+-- create or replace 는 EXECUTE 를 PUBLIC 에 자동으로 준다. 회수가 반드시 뒤에 와야 하고,
+-- 순서를 뒤집으면 PostgREST 의 /rest/v1/rpc/ 로 미로그인 호출이 열린다.
+revoke execute on function public.apply_polar_event(text, text, timestamptz, uuid, text, text, text, timestamptz)
+  from public, anon, authenticated;
+
+grant execute on function public.apply_polar_event(text, text, timestamptz, uuid, text, text, text, timestamptz)
+  to service_role;
 ```
-src/app/api/billing/checkout/route.ts        (신규)
-src/app/api/billing/checkout/route.test.ts   (신규 — 먼저)
-src/app/api/billing/portal/route.ts          (신규)
-src/app/api/billing/portal/route.test.ts     (신규 — 먼저)
-```
+
+**`grant update on public.profiles to service_role`을 쓰지 마라.** D-16의 결정이다:
+함수가 `security definer`라 소유자 권한으로 돌기 때문에 롤 권한이 필요 없고,
+UPDATE를 열어 주면 **`apply_polar_event` 밖에서도 `plan`을 바꿀 수 있게 되어 ADR-020의
+"유일한 경로"가 규율 문제로 내려앉는다.** 지금은 타입이 아니라 권한이 막고 있다.
+
+`webhook_events`에도 GRANT를 주지 마라 — 같은 이유다.
 
 ## 먼저 작성할 테스트
 
-`vi.mock('@/services/polar/client')`와 Supabase 모듈을 갈아끼운다.
+`supabase/migrations.test.ts`에 `describe("polar billing")` 블록을 추가한다. 기존
+`describe("upload recompute")`가 그대로 형판이다 — **SQL을 텍스트로 읽어 검사한다. DB가 필요 없다.**
 
-### checkout — 인증
-1. 세션 없으면 401
-2. 미들웨어를 믿고 생략하지 않는다 (라우트 단독 호출 테스트)
+### 원자성 ← ADR-021 (게이트 G1)
+1. `apply_polar_event` 함수 본문에 `webhook_events`에 대한 **INSERT가 있다**
+2. 같은 본문에 `profiles`에 대한 **UPDATE가 있다**
+3. **둘이 같은 함수 본문 안에 있다** — 두 개의 별도 함수로 쪼개지지 않았다
 
-### checkout — 요청을 신뢰하지 않는다 ← 이 step의 핵심
-3. **요청 본문의 `productId`를 무시한다.** `{ productId: '남의-상품' }`을 보내도 `getProductId()` 값이 쓰인다
-4. **요청 본문의 `userId`/`customerId`를 무시한다.** `external_customer_id`가 **세션의 user.id**다
-5. **요청 본문의 `returnUrl`/`successUrl`을 무시한다.** return URL이 `getSiteUrl() + '/dashboard?checkout=1'`이다
-6. `?next=https://evil.com`을 붙여도 외부 URL이 안 나간다
-7. **가격·금액을 요청에서 읽지 않는다** — Polar 상품 설정이 청구 source of truth다(PRD)
+### 데이터를 건드리지 않는다 ← ADR-008 (게이트 G2)
+4. 함수 본문에 `uploads`에 대한 DELETE/UPDATE/INSERT가 **없다**
+5. 함수 본문에 `transactions`에 대한 DELETE/UPDATE/INSERT가 **없다**
 
-### checkout — 동작
-8. 이미 `plan === 'pro'`면 checkout을 만들지 않고 `/dashboard`로 보낸다 (중복 구독 방지)
-9. `profiles.polar_customer_id`가 있으면 그 customer로 연결한다 — 재구독 시 새 customer가 생기면 안 된다
-10. Polar SDK가 던지면 502 + `{ error: 'upstream' }` (고정 어휘)
-11. 성공 시 checkout URL로 리다이렉트한다
+### 권한 최소화 ← D-16 (게이트 G5)
+6. 함수가 `security definer`다
+7. `set search_path = ''`가 있다
+8. `revoke execute`가 `create or replace function` **뒤에** 온다 (문자열 인덱스 비교)
+9. `revoke`의 대상이 `public, anon, authenticated`를 전부 포함한다
+10. `grant execute`의 대상이 `service_role`**만**이다 — `anon`·`authenticated`·`public`이 없다
+11. **`0008`이 `profiles`에 `grant update`를 하지 않는다** ← D-16
+12. **`0008`이 `webhook_events`에 어떤 GRANT도 하지 않는다**
 
-### portal
-12. 세션 없으면 401
-13. `polar_customer_id`가 없으면 **404 또는 400** — 결제한 적 없는 사용자에게 포털이 없다. 여기서 customer를 새로 만들지 마라
-14. 있으면 포털 세션을 만들어 리다이렉트한다
-15. 요청의 `customerId`를 무시하고 **DB의 값**을 쓴다. 이게 뚫리면 남의 결제 정보를 본다
-16. SDK 실패 시 502 + `upstream`
+### 일반화 — 앞으로의 모든 함수에 적용 (게이트 G5)
+13. **모든 마이그레이션 파일을 훑어, `security definer` 함수마다 `revoke execute`가 뒤따르는지 검사한다.** `replace_upload_result`·`apply_polar_event`·기존 트리거 함수 2개가 전부 걸린다.
+    이 테스트 하나가 앞으로 추가될 함수까지 자동으로 덮는다 — 이것이 `supabase-safe-migration` skill을 만들지 않기로 한 근거다(PLAN.md §skill 판단)
 
-### 권한을 열지 않는다 ← ADR-020
-17. **두 라우트 어디에서도 `profiles.plan`을 바꾸지 않는다.** Supabase update mock이 `plan`을 포함해 호출되지 않음을 assert하라. plan은 **검증된 웹훅 transaction 안에서만** 바뀐다
-
-### 로깅
-18. 토큰·고객 식별자·이메일이 로그에 없다
+### 기존 불변식 유지
+14. `subscriptions` 테이블을 만들지 않는다 (기존 테스트 유지 — 게이트 G6)
+15. `DROP TABLE`이 없다 (기존 테스트 유지)
+16. 마이그레이션 번호가 **연속**이고 중복이 없다 ← `0005` 충돌 재발 방지
 
 ## Codex 실행 지시문
 
-### 요청에서 읽는 것은 아무것도 없다
+### 테이블을 만들지 마라
 
-```ts
-// checkout
-const { data: { user } } = await getUser();          // 세션에서
-const productId = getProductId();                    // 환경변수에서
-const returnUrl = `${getSiteUrl()}/dashboard?checkout=1`;   // 서버가 구성
+`profiles`(컬럼 4개 전부) · `webhook_events`는 **Phase 0의 `0001_schema.sql`에 이미 있다.**
+`alter table ... add column`도 필요 없다. 이 마이그레이션은 **함수 하나와 권한뿐**이다.
 
-// 요청 본문을 파싱조차 하지 마라 — 읽을 것이 없다.
+확인:
+
+```bash
+grep -n "polar_customer_id\|polar_subscription_id\|source_modified_at" supabase/migrations/0001_schema.sql
+grep -n "webhook_events" supabase/migrations/0001_schema.sql
 ```
 
-ARCHITECTURE.md: *"checkout은 서버가 `POLAR_PRODUCT_ID` 하나만 허용하고 `external_customer_id=user.id`를 싣는다. **요청의 product ID·user ID·return URL을 신뢰하지 않는다.**"*
+### 재실행 안전 (멱등)
 
-본문을 파싱하지 않으면 신뢰할 것도 없다. **가장 단순한 방어다.**
+`create or replace` · `on conflict do nothing` · `grant`/`revoke`는 전부 멱등이다.
+0005·0006·0007이 전부 이 성질을 주석으로 명시했다. **같은 주석을 남겨라** — 사람이 SQL Editor에서 두 번 붙여 넣는 일이 실제로 일어난다.
 
-### `external_customer_id`가 연결 고리다
+### `DROP` 금지
 
-웹훅(step 2)이 이 값으로 우리 사용자를 찾는다. **반드시 `user.id`(Supabase auth uid)여야 한다.** 이메일이나 다른 식별자를 쓰지 마라 — 이메일은 바뀔 수 있다.
+`bash-guard.mjs`가 `DROP TABLE`을 차단한다. `drop function`도 쓰지 마라 — `create or replace`로 충분하고, drop은 의존하는 권한을 함께 날린다.
 
-### customer ID의 단일 출처
+### 파일 상단 주석
 
-ARCHITECTURE.md §DB 스키마: `polar_customer_id text unique, -- customer ID의 단일 출처`
+0005·0006·0007이 전부 **「문제 → 원칙 → 재실행 안전」** 형식의 주석을 갖고 있다. 같은 형식으로 써라. 특히 남겨야 할 것:
 
-이미 있으면 그것을 쓰고, 없으면 Polar가 만들게 둔 뒤 **웹훅이 저장한다.** 이 라우트에서 `profiles`에 쓰지 마라 — 쓰기 주체를 하나로 유지한다.
+- 왜 plpgsql 함수인가 — Supabase JS 클라이언트는 여러 문장을 하나의 transaction으로 묶지 못한다(ADR-021)
+- 왜 `service_role`에 `profiles` UPDATE를 주지 않는가 — D-16
+- 반환 어휘 4개의 의미
 
-### return URL은 `/dashboard?checkout=1` 하나
+### 기존 마이그레이션을 고치지 마라
 
-ADR-020:
-
-> return URL은 서버가 구성하며 `/dashboard?checkout=1`이다. 대시보드는 `profiles.plan`을 **서버에서 읽어** 화면을 정하고, `checkout=1`은 아직 Free일 때 "결제 확인 중" 안내를 띄우는 데만 쓴다. **쿼리 파라미터가 여는 것은 안내 문구지 기능이 아니다.** 전용 성공 페이지와 상태 폴링 라우트는 두지 않는다.
-
-`/billing/success` 페이지를 만들지 마라. `/api/billing/status` 폴링 라우트를 만들지 마라.
-
-### `plan`을 여기서 바꾸지 마라
-
-ADR-020: *"success URL·checkout ID·클라이언트 응답은 권한 근거가 아니다. `profiles.plan`은 검증된 웹훅 transaction 안에서만 바뀐다."*
-
-이 라우트에서 낙관적으로 `pro`로 바꾸고 싶어질 것이다. **바꾸지 마라.** 결제가 실패해도 Pro가 되고, 그걸 되돌릴 웹훅이 안 올 수도 있다.
-
-### portal은 customer를 만들지 않는다
-
-`polar_customer_id`가 없다는 건 **결제한 적이 없다는 뜻**이다. 포털에 보여줄 게 없다. customer를 새로 만들어 빈 포털을 열지 마라 — 사용자가 혼란스럽고 Polar에 유령 customer가 쌓인다.
-
-화면(`/upgrade`·대시보드)이 `plan === 'free'`면 포털 링크를 아예 안 보여주는 것이 정답이다.
-
-### 결제수단·영수증 UI를 만들지 마라
-
-PRD: *"결제수단·영수증·취소 UI는 만들지 않는다 — Polar Customer Portal에 위임."*
+`0001`~`0007`은 **live DB에 이미 적용됐다.** 파일을 고치면 파일과 DB가 갈린다. 새 파일만 추가하라.
 
 ## 완료 조건
 
-- 두 라우트 + 테스트가 존재하고 18개 항목이 전부 통과한다
-- checkout이 요청 본문을 신뢰하지 않는다 (파싱조차 안 하는 것이 이상적)
-- `external_customer_id`가 세션의 `user.id`다
-- return URL이 `getSiteUrl()` 기반이다
-- **두 라우트 어디에서도 `plan`을 바꾸지 않는다**
-- portal이 customer를 새로 만들지 않는다
-- 에러가 고정 어휘다
+- `supabase/migrations/0008_polar_event_fn.sql`이 존재한다 (**`0005`가 아니다**)
+- `apply_polar_event`가 위 시그니처·반환 어휘 4개를 그대로 갖는다
+- 함수 안에서 `webhook_events` INSERT와 `profiles` UPDATE가 **함께** 일어난다
+- `security definer` + `set search_path = ''`
+- `revoke`가 `create or replace` 뒤에 오고, `grant execute`는 `service_role`에만
+- **`profiles`에 `grant update`가 없다**
+- `uploads`·`transactions`를 언급하지 않는다
+- `migrations.test.ts`에 16개 항목이 추가되고 전부 통과한다
+- **TypeScript 파일을 하나도 만들지 않았다** (`migrations.test.ts` 수정 제외)
 - `npm run lint && npm run build && npm run test` 통과
 
 ## 검증 명령
 
 ```bash
 npm run lint && npm run build && npm run test
-npx vitest run src/app/api/billing
+npx vitest run supabase/migrations.test.ts
 ```
 
 직접 확인:
 
 ```bash
-grep -rnE "req\.json\(\)|searchParams" src/app/api/billing/checkout/route.ts && echo "확인 필요: 요청에서 무언가 읽는다" || echo "OK"
-grep -rn "plan" src/app/api/billing/*/route.ts | grep -iE "update|upsert|set" && echo "FAIL: 라우트가 plan 을 바꾼다" || echo "OK"
-ls src/app/billing 2>/dev/null && echo "FAIL: 전용 성공 페이지" || echo "OK"
+ls supabase/migrations/0008_polar_event_fn.sql || echo "FAIL: 번호가 틀렸다"
+ls supabase/migrations/0005_polar_event_fn.sql 2>/dev/null && echo "FAIL: 0005 는 grants 다" || echo "OK"
+grep -c "0005_grants.sql" supabase/README.md    # 1 이상이어야 한다
+
+grep -n "security definer" supabase/migrations/0008_polar_event_fn.sql || echo "FAIL"
+grep -n "search_path" supabase/migrations/0008_polar_event_fn.sql || echo "FAIL"
+grep -nE "grant .*update.* on .*profiles" supabase/migrations/0008_polar_event_fn.sql && echo "FAIL: D-16 위반" || echo "OK"
+grep -nE "uploads|transactions" supabase/migrations/0008_polar_event_fn.sql && echo "FAIL: ADR-008 위반" || echo "OK"
+grep -niE "drop (table|function)" supabase/migrations/0008_polar_event_fn.sql && echo "FAIL" || echo "OK"
+
+# revoke 가 create 뒤인지 (행 번호 비교)
+grep -n "create or replace function public.apply_polar_event" supabase/migrations/0008_polar_event_fn.sql
+grep -n "revoke execute on function public.apply_polar_event" supabase/migrations/0008_polar_event_fn.sql
+
+# 이 step 은 TS 를 만들지 않는다
+git status --porcelain src/ | grep . && echo "FAIL: src/ 를 건드렸다" || echo "OK"
 ```
 
 ## 검증 절차
 
 1. 위 AC 커맨드를 실행한다.
 2. 아키텍처 체크리스트:
-   - ARCHITECTURE.md §Polar 결제 — 요청의 product ID·user ID·return URL을 신뢰하지 않는가?
-   - ADR-020 — `plan`을 웹훅 밖에서 바꾸지 않는가? 전용 성공 페이지·폴링 라우트를 안 만들었는가?
-   - ADR-007 — 결제수단·영수증·취소 UI를 안 만들었는가?
-   - ARCHITECTURE.md §디렉토리 구조 — `api/billing/{checkout,portal}/route.ts` 위치인가?
-   - AGENTS.md CRITICAL — 외부 SDK 호출이 라우트 안에만 있는가? 에러가 고정 어휘인가? 로그에 PII 없는가?
+   - ADR-021 (G1) — INSERT와 UPDATE가 한 함수 안에 있는가? `subscriptions` 테이블이 없는가(G6)?
+   - ADR-008 (G2) — `uploads`·`transactions`를 언급하지 않는가?
+   - D-16 (G5) — `security definer` + EXECUTE만? `profiles` UPDATE grant가 없는가?
+   - D-17 — 번호가 `0008`인가?
+   - AGENTS.md — `DROP TABLE`이 없는가? 새 함수의 GRANT를 같은 마이그레이션에 넣었는가?
 3. 결과에 따라 `phases/5-billing/index.json`의 step 1을 업데이트한다:
-   - 성공 → `"status": "completed"`, `"summary"` 한 줄 (예: "app/api/billing/{checkout,portal}/route.ts — checkout은 요청 본문을 읽지 않고 productId=env·external_customer_id=session user.id·returnUrl=getSiteUrl()+/dashboard?checkout=1, 이미 pro면 대시보드로. portal은 DB의 polar_customer_id만 쓰고 없으면 거절(customer 생성 안 함). 두 라우트 모두 plan을 바꾸지 않는다")
+   - 성공 → `"status": "completed"`, `"summary"` 한 줄. **RPC 인자 순서와 반환 어휘를 반드시 적어라 — step 3이 이걸 읽는다** (예: "migrations/0008_polar_event_fn.sql — apply_polar_event(p_event_id text, p_event_type text, p_event_created_at timestamptz, p_user_id uuid, p_plan text, p_customer_id text, p_subscription_id text, p_modified_at timestamptz) returns text: applied|duplicate|stale|subscription_mismatch. webhook_events on conflict do nothing → profiles for update → 2단 검사 → 갱신, 전부 한 함수. security definer + search_path='' + revoke 후 service_role EXECUTE만(profiles UPDATE grant 없음). migrations.test.ts 에 불변식 16개 추가")
    - 3회 실패 → `"status": "error"` + `"error_message"`
    - 사람 개입 필요 → `"status": "blocked"` + `"blocked_reason"` 후 중단
+4. **`summary`에 「`0008`을 live DB에 적용해야 한다 — 적용 전에는 웹훅 URL을 Polar에 등록하지 마라」를 반드시 덧붙여라.** 순서가 뒤집히면 Polar가 없는 함수로 이벤트를 보내고 재전송 끝에 유실된다.
 
 ## commit 기준
 
-`feat(5-billing): step 1 — billing-routes`
+`feat(5-billing): step 1 — billing-schema`
 
-포함: `src/app/api/billing/**`
+포함: `supabase/migrations/0008_polar_event_fn.sql` · `supabase/migrations.test.ts`
 
 ## 금지사항
 
-- **요청 본문·쿼리에서 product ID·user ID·return URL·가격을 읽지 마라.** 이유: 하나라도 신뢰하면 누구나 임의 상품·임의 사용자·임의 리다이렉트를 만들 수 있다(ARCHITECTURE.md §Polar 결제).
-- **이 라우트에서 `profiles.plan`을 바꾸지 마라.** 이유: success URL·checkout ID·클라이언트 응답은 권한 근거가 아니다. 결제가 실패해도 Pro가 되고 되돌릴 웹훅이 안 올 수 있다(ADR-020).
-- **`/billing/success` 페이지를 만들지 마라.**
-- **`/api/billing/status` 폴링 라우트를 만들지 마라.** 이유: 웹훅은 보통 수 초 안에 도착하고, 늦으면 새로고침이 답이다(ADR-020).
-- **portal에서 customer를 새로 만들지 마라.** 이유: 결제한 적 없는 사용자에게 빈 포털을 열면 혼란스럽고 Polar에 유령 customer가 쌓인다.
-- **`profiles.polar_customer_id`를 여기서 쓰지 마라.** 이유: 쓰기 주체는 웹훅 하나다.
-- **결제수단·영수증·취소 UI를 만들지 마라.** 이유: Polar Customer Portal에 위임했다(ADR-007).
-- **다단계 요금제·쿠폰·프로모션 코드를 만들지 마라.** 이유: 단일 상품 월 구독이다.
-- **에러 어휘를 늘리지 마라.**
-- **로그에 토큰·고객 식별자·이메일을 남기지 마라.**
+- **`0005`·`0006`·`0007` 번호를 재사용하지 마라.** 이유: 이미 존재하고 live DB에 적용됐다. 옛 계획서가 `0005`를 예약했지만 그건 `0005_grants.sql`이 가져갔다(D-17).
+- **기존 마이그레이션 파일을 수정하지 마라.** 이유: live DB에 적용된 것과 파일이 갈린다.
+- **`profiles`·`webhook_events` 테이블을 새로 만들거나 컬럼을 추가하지 마라.** 이유: `0001_schema.sql`에 4개 컬럼이 전부 있다.
+- **`grant update on public.profiles to service_role`을 쓰지 마라.** 이유: `security definer`라 필요 없고, 열어 주면 `apply_polar_event` 밖에서도 `plan`을 바꿀 수 있어 ADR-020의 "유일한 경로"가 무너진다(D-16).
+- **`webhook_events` INSERT와 `profiles` UPDATE를 두 함수로 쪼개지 마라.** 이유: 크래시 시 이벤트가 처리됨으로 기록된 채 반영되지 않고, 재전송마저 멱등 검사에 걸려 버려진다(ADR-021).
+- **함수에서 `uploads`·`transactions`를 건드리지 마라.** 이유: 구독 종료는 화면만 잠근다(ADR-008).
+- **`subscriptions` 테이블을 만들지 마라.** 이유: 앱이 묻는 질문은 "Pro인가" 하나다(ADR-021).
+- **`revoke`를 `create or replace` 앞에 두지 마라.** 이유: `create or replace`가 EXECUTE를 PUBLIC에 다시 준다. 0007 주석이 같은 함정을 기록했다.
+- **`DROP TABLE`·`drop function`을 쓰지 마라.**
+- **라우트·서비스 등 TypeScript 구현을 만들지 마라.** 이유: step 2·3이다. 이 step은 DB 계약만 굳힌다.
+- **이 step에서 DB에 직접 적용하려 하지 마라.** 이유: SQL 파일을 커밋하는 데서 끝난다(PLAN.md D-8). 적용은 사람이 한다 — 적용 못 했다고 `blocked` 처리하지 마라.
 - 기존 테스트를 깨뜨리지 마라.

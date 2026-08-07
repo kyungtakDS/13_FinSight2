@@ -30,7 +30,7 @@ src/
 ├── services/
 │   ├── claude/map-columns.ts        (LLM 호출 ①)
 │   ├── claude/classify-merchants.ts (LLM 호출 ②)
-│   └── polar/{client,checkout,webhook}.ts
+│   └── polar/client.ts              (SDK 인스턴스 · lazy 설정값만)
 └── types/                                 (tdd-guard 면제)
 ```
 
@@ -208,7 +208,7 @@ webhook_events(event_id text pk, event_type text not null,
 | 사용자 요청 라우트 · 서버 컴포넌트 | `createServerClient` + 세션 쿠키 | **RLS** |
 | `after()` 안의 워커 | 요청 컨텍스트가 사라질 수 있으므로 service role | RLS 우회 → **헬퍼가 `userId`를 필수 첫 인자로 받는다** |
 | 전역 사전 갱신 | service role (사용자 소유가 아님) | 쓰기 경로를 `lib/classify/dictionary.ts` 하나로 제한 |
-| Polar 웹훅 | 사용자 컨텍스트 없음 → service role | 서명 검증이 유일한 관문 |
+| Polar 웹훅 | 사용자 컨텍스트 없음 → service role | 서명 검증이 첫 관문. **그 뒤는 권한이 막는다** — service role은 `apply_polar_event` EXECUTE만 갖고 `profiles` UPDATE 권한이 없다 |
 
 ## Claude API
 
@@ -239,5 +239,31 @@ webhook_events(event_id text pk, event_type text not null,
 - 웹훅은 **원문 body 서명 검증을 가장 먼저** 한다. 검증 전 JSON 파싱·DB 쓰기·로그 출력 금지 (`await req.text()`로 raw body를 받아야 하며, 먼저 `req.json()`을 호출하면 검증이 깨진다)
 - **`webhook_events` INSERT와 `profiles` 갱신(`plan`·`polar_subscription_id`·`source_modified_at`)은 한 transaction이다.** 나누면 크래시 시 이벤트가 처리됨으로 기록된 채 반영되지 않고, 재전송까지 멱등 검사에 걸려 버려진다 → 결제는 성공했는데 영원히 Free
 - 순서 역전 방어 2단: `modified_at`이 저장된 `source_modified_at`보다 오래되면 무시 **+ subscription ID가 현재 값과 일치하는지 확인**(재구독 시 옛 구독의 지연된 `revoked`가 새 구독을 죽이는 것을 막는다)
-- `past_due`는 Polar가 `unpaid`/`revoked`를 보낼 때까지 Pro 유지. **우리 쪽 유예 타이머를 만들지 않는다**
+- `past_due`는 Polar가 `unpaid`/`revoked`로 넘길 때까지 Pro 유지. **우리 쪽 유예 타이머를 만들지 않는다**
 - **구독 종료는 `profiles.plan`을 `free`로 되돌릴 뿐 데이터를 건드리지 않는다.** 웹훅 핸들러에서 `uploads`·`transactions`를 삭제하거나 익명화하지 마라 — 재구독 시 그대로 다시 열려야 한다
+- **SDK 프레임워크 헬퍼(`@polar-sh/nextjs`)를 쓰지 않는다.** `Checkout`이 product·customer를 쿼리 파라미터에서 읽어 위 첫 항목을 위반하고, 세 헬퍼 모두 SDK 원본 에러를 `console.error`로 남긴다. `@polar-sh/sdk`를 직접 부르고 서명 검증은 `@polar-sh/sdk/webhooks`의 `validateEvent`를 쓴다 (ADR-023)
+
+### 처리하는 이벤트와 `plan` 매핑
+
+**`subscription.unpaid` 이벤트는 존재하지 않는다.** `unpaid`는 `SubscriptionStatus`의 값이고
+`subscription.updated` 안으로만 온다 — 이벤트 타입으로 착각하면 미납 사용자가 계속 Pro다.
+
+| 이벤트 | 처리 |
+|---|---|
+| `subscription.created` · `subscription.updated` | `data.status`에서 파생 ← **`unpaid`가 여기로 온다** |
+| `subscription.active` · `.uncanceled` · `.resumed` | `pro` |
+| `subscription.past_due` | **`pro` 유지** — 유예 타이머 없음 |
+| `subscription.canceled` | **`pro` 유지.** 해지 *예약*일 뿐이고 결제한 기간이 남아 있다 (ADR-008) |
+| `subscription.paused` | `free` |
+| `subscription.revoked` | **`free`** — 실제 종료는 여기다 |
+| 그 외 (`order.*` 등) | 200 + 아무것도 안 함. 4xx/5xx를 주면 무한 재전송 |
+
+`data.status` → plan: `active`·`trialing`·`past_due` → `pro` / `unpaid`·`paused`·`canceled`·`incomplete`·`incomplete_expired` → `free`.
+단 **이벤트 타입이 `subscription.canceled`면 status가 무엇이든 `pro`를 유지한다** — 해지 시점의
+status 표현이 Polar 구현에 달려 있으므로 두 겹으로 막는다.
+
+### 권한
+
+`apply_polar_event`는 `security definer` 함수이고 **`service_role`은 그 함수의 EXECUTE만 갖는다.**
+`profiles` UPDATE 권한도, `webhook_events` 권한도 주지 않는다 — `plan`을 바꾸는 경로가
+"유일하다"는 것이 규율이 아니라 권한으로 강제된다.

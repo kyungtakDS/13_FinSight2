@@ -1,0 +1,114 @@
+{
+  "project": "FinSight2",
+  "phase": "6-integrity",
+  "harness_executed": false,
+  "note": "하네스(execute.py) 밖에서 GitHub 이슈/PR 로 수행된 완료 기록이다. step{N}.md 가 없고 재실행 대상이 아니다. README.md 참고. completed_at 은 execute.py 가 아니라 git 커밋 날짜에서 왔다.",
+  "steps": [
+    {
+      "step": 0,
+      "name": "browser-env-static",
+      "status": "completed",
+      "summary": "676ab48 (PR #20) — 브라우저 Supabase 클라이언트가 NEXT_PUBLIC_* 를 동적 조회가 아니라 정적으로 참조하도록. 번들러가 치환하지 못해 런타임에 값이 비던 문제",
+      "completed_at": "2026-08-04"
+    },
+    {
+      "step": 1,
+      "name": "table-grants",
+      "status": "completed",
+      "summary": "e040297 (PR #21) — supabase/migrations/0005_grants.sql 신규. 0001~0004 가 테이블 권한을 한 번도 부여하지 않아 모든 롤이 42501 을 맞고 있었다(uploads 0행). 미인증 요청은 401 로. service_role 에 profiles UPDATE 는 주지 않았다 — Phase 5 웹훅 몫으로 남김",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 2,
+      "name": "classify-schema-observability",
+      "status": "completed",
+      "summary": "70e0aff (PR #22) — 가맹점 분류 schema 실패를 원인별로 구분해 로그에 남긴다. PII 없이 코드와 건수만",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 3,
+      "name": "personal-verdict-preserved",
+      "status": "completed",
+      "summary": "a7ea09d (PR #23) — personal 판정이 uncertain 으로 강등되던 경로를 끊는다. 절세 추정에서 personal 이 제외 대상으로 새던 문제",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 4,
+      "name": "landing-cta",
+      "status": "completed",
+      "summary": "aebcc9d (PR #24) — 랜딩 CTA 가 로그인 대신 페이지 내 앵커로 끝나던 문제. 가입 진입이 실제로 열림",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 5,
+      "name": "upstream-failure-batching",
+      "status": "completed",
+      "summary": "e842c97 (PR #26) — supabase/migrations/0006_upload_error_detail.sql 신규. upstream 실패의 원인을 기록하고 배치를 작게 쪼개 부분 결과를 지킨다",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 6,
+      "name": "dictionary-url-chunking",
+      "status": "completed",
+      "summary": "93b3cbd (PR #27) — 가맹점 사전 조회를 URL 길이 기준으로 쪼갠다. 상호명이 많으면 PostgREST 쿼리 URL 이 한도를 넘어 통째로 실패하던 문제. 실패 원인을 출처별로 기록",
+      "completed_at": "2026-08-05"
+    },
+    {
+      "step": 7,
+      "name": "classify-backoff-retry",
+      "status": "completed",
+      "summary": "1cbcd73 (PR #28) — 상류 과부하(529 등)를 배치 단위 백오프 재시도로 견딘다",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 8,
+      "name": "canceled-txn-offset",
+      "status": "completed",
+      "summary": "9a027ec (PR #25) — 취소 거래를 상태값 의미대로 제외하거나 상계한다. 취소 19건이 양수로 합산돼 절감액이 부풀던 문제",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 9,
+      "name": "status-map-resilience",
+      "status": "completed",
+      "summary": "c255e1f (PR #32) — 상태 판정 실패가 명세서 전체를 죽이지 않게 한다. src/services/claude/map-status.ts",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 10,
+      "name": "korean-date-rows-unreadable",
+      "status": "completed",
+      "summary": "ab75896 (PR #34) — 한국어 날짜 표기(2026년 8월 6일 등)를 읽고, 못 읽은 행을 rows_unreadable 로 드러낸다. CSV 는 읽었지만 거래 정보를 해석 못 한 경우를 parse_failed 와 분리",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 11,
+      "name": "rows-unreadable-vocab",
+      "status": "completed",
+      "summary": "bba9278 (PR #35) — rows_unreadable 을 AGENTS.md·docs 의 고정 에러 어휘 목록에 반영. 어휘가 7개에서 8개로",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 12,
+      "name": "structured-json-boundary",
+      "status": "completed",
+      "summary": "2a94938 (PR #37) — 구조화 응답의 JSON 경계를 services/claude/client.ts 공통 계층에서 정규화. 호출부 2곳이 각자 벗겨내던 것을 한 곳으로",
+      "completed_at": "2026-08-06"
+    },
+    {
+      "step": 13,
+      "name": "cancel-only-statement-completed",
+      "status": "completed",
+      "summary": "0f2df5e (issue #36 / PR #38) — 승인취소만 남은 명세서를 실패가 아니라 완료로 처리한다. 거래가 0건인 것은 파싱 실패가 아니다",
+      "completed_at": "2026-08-07"
+    },
+    {
+      "step": 14,
+      "name": "upload-recompute",
+      "status": "completed",
+      "summary": "d7f9a54 (issue #30 / PR #39) — supabase/migrations/0007_upload_recompute.sql 신규. completed 업로드를 재계산하되 성공 전까지 기존 결과를 유지한다. replace_upload_result() plpgsql 로 delete→insert→update 를 한 트랜잭션에. security definer + service_role EXECUTE 만 — Phase 5 의 apply_polar_event 가 따를 형판",
+      "completed_at": "2026-08-07"
+    }
+  ],
+  "completed_at": "2026-08-07"
+}
