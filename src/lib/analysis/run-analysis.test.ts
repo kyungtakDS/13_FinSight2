@@ -270,6 +270,43 @@ describe("runAnalysis", () => {
     vi.restoreAllMocks();
   });
 
+  // 승인취소로 제외된 행은 읽기에 실패한 게 아니라 상태 판정이 성공한 결과다.
+  // 실패로 돌리면 멀쩡한 파일을 다시 받으라고 안내하게 되고, 다시 올려도 결과가
+  // 같아 사용자가 빠져나올 수 없다 (#36).
+  it("completes with zero transactions when every input row was voided", async () => {
+    mocks.normalizeRows.mockReturnValue({ txns: [], skipped: 0, excluded: 3 });
+    mocks.period.mockReturnValue({ start: null, end: null });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "completed", errorCode: null, rowCount: 0 }),
+    );
+    expect(mocks.aggregate).toHaveBeenCalledWith(expect.any(Array), 3, false, 0);
+  });
+
+  // 읽지 못한 행이 하나라도 있으면 사용자가 원본을 다시 받아 조치할 여지가 있다.
+  // 취소 제외가 섞였다는 이유로 완료로 넘기면 그 여지가 사라진다.
+  it("still fails when unreadable rows are mixed with voided ones", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.normalizeRows.mockReturnValue({ txns: [], skipped: 2, excluded: 3 });
+    const { runAnalysis } = await import("./run-analysis");
+
+    await runAnalysis("user-1", "upload-1");
+
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      "user-1",
+      "upload-1",
+      expect.objectContaining({ status: "failed", errorCode: "rows_unreadable" }),
+    );
+    expect(mocks.insertTxns).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
   it("does not call it a failure when the file simply had no data rows", async () => {
     mocks.normalizeRows.mockReturnValue({ txns: [], skipped: 0, excluded: 0 });
     mocks.period.mockReturnValue({ start: null, end: null });

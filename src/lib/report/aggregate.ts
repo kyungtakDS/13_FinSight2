@@ -36,8 +36,21 @@ function createInsights(
   statusUnresolved: boolean,
   skippedCount: number,
 ): Insight[] {
+  // 승인취소만 있던 명세서는 거래 0건으로 정상 완료된다 (#36). 그때 아무 말도
+  // 하지 않으면 사용자는 설명 없는 빈 리포트를 보고 분석이 실패했다고 읽는다.
   if (txns.length === 0) {
-    return [];
+    if (excludedCount === 0) {
+      return [];
+    }
+
+    const excluded = excludedCount.toLocaleString("ko-KR");
+    return [
+      {
+        id: "empty-after-exclusion",
+        title: `승인취소 ${excluded}건 제외`,
+        body: `승인이 취소되어 청구되지 않은 거래 ${excluded}건이 제외되어 분석 대상 거래가 없습니다.`,
+      },
+    ];
   }
 
   const insights: Insight[] = [];

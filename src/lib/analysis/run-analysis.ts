@@ -375,9 +375,12 @@ export async function runAnalysis(
         }),
       );
     }
-    // 전부 못 읽었는데 completed 로 저장하면 사용자가 "경비 0원" 이라는 틀린
-    // 결론을 성공 화면에서 읽는다. 실패로 남겨야 원인을 찾을 수 있다.
-    if (inputRows > 0 && normalized.length === 0) {
+    // 거래가 하나도 남지 않는 원인은 둘이고, 사용자가 할 일이 서로 다르다.
+    // skipped 는 날짜·가맹점·금액 해석에 실패한 것이라 원본을 다시 받아야 하지만,
+    // excluded 는 승인취소로 정상 판정되어 빠진 것이라 할 일이 없다. 후자까지
+    // 실패로 부르면 멀쩡한 파일을 다시 올리라고 안내하게 되고, 다시 올려도 결과가
+    // 같아 빠져나올 수 없다 (#36). 전부 못 읽은 경우만 실패로 남긴다.
+    if (skipped > 0 && normalized.length === 0) {
       throw new RowsUnreadable();
     }
     stage = "classify";
