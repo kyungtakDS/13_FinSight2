@@ -152,6 +152,24 @@ describe("aggregate", () => {
     expect(`${voided.title} ${voided.body}`).not.toMatch(/merchant-|100/);
   });
 
+  // 전 행이 승인취소면 거래 0건으로 정상 완료된다. 여기서 아무 말도 하지 않으면
+  // 사용자는 설명 없는 빈 리포트를 보고 분석이 실패했다고 읽는다 (#36).
+  it("explains an empty report left behind by voided rows", () => {
+    const insights = aggregate([], 4).insights;
+    expect(insights).toHaveLength(1);
+    expect(`${insights[0]!.title} ${insights[0]!.body}`).toContain("4");
+  });
+
+  it("puts only counts in the empty-after-exclusion insight", () => {
+    const empty = aggregate([], 4).insights[0]!;
+    expect(`${empty.title} ${empty.body}`).not.toMatch(/merchant-|2026-|원/);
+  });
+
+  it("stays silent for an empty report with nothing excluded", () => {
+    expect(aggregate([]).insights).toEqual([]);
+    expect(aggregate([], 0).insights).toEqual([]);
+  });
+
   // 취소 판정에 실패하면 취소 건이 정상 거래로 합계에 들어간다. 과대계상은
   // 누락보다 위험하므로 조용히 넘어가지 않는다 (ADR-014).
   it("warns when a status verdict could not be resolved", () => {
