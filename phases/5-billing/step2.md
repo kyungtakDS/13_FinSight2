@@ -200,7 +200,8 @@ as $$ … $$;
 
 - **`set search_path`를 빠뜨리지 마라.** 함수 정의에 붙여라 — 함수 본문 안에서 `set search_path`를 실행하는 것으로 대신하지 마라.
 - **`''`는 스키마 한정을 선택이 아니라 필수로 만든다.** 검색 경로가 비었으므로 한정하지 않은 이름은 아무것도 찾지 못하고 함수가 런타임에 죽는다. 이게 이 설정의 요점이다 — 이름 해석이 조용히 엉뚱한 객체로 가는 대신 즉시 실패한다.
-- 함수 본문의 **모든 DB 객체를 스키마 한정**하라. 테이블만이 아니라 함수·타입·연산자까지다: `public.webhook_events`·`public.profiles`, `public.now()`가 아닌 내장 함수라면 `pg_catalog.now()`. 한정을 빠뜨리면 `relation "profiles" does not exist`로 터진다.
+- 함수 본문의 **`public` 객체를 전부 스키마 한정**하라 — 테이블만이 아니라 우리가 만든 함수·타입·시퀀스까지다: `public.webhook_events`·`public.profiles`. 한정을 빠뜨리면 `relation "profiles" does not exist`로 터진다.
+- **`pg_catalog` 내장 함수는 한정하지 않아도 된다.** `search_path`가 비어 있어도 `pg_catalog`는 항상 암묵적으로 먼저 검색된다 — `now()`·`coalesce()`·`jsonb_array_elements()`는 그대로 쓴다. `0007_upload_recompute.sql`이 `search_path = ''` 아래서 그렇게 쓰고 있다. 굳이 `pg_catalog.`를 붙여 레포 스타일에서 벗어나지 마라.
 
 ```sql
 -- ✅
