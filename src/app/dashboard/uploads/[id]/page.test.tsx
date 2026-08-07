@@ -14,7 +14,13 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
 }));
 vi.mock("@/lib/supabase/server", () => ({ getUser, createClient }));
-vi.mock("@/lib/supabase/service", () => ({ getUploadForUser, getProfilePlan }));
+// isRecomputing 은 CAS 와 같은 15분 창을 쓴다 — mock 으로 갈아치우면 화면이
+// 실제 잠금 상태를 반영하는지 검증할 수 없다.
+vi.mock("@/lib/supabase/service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/supabase/service")>()),
+  getUploadForUser,
+  getProfilePlan,
+}));
 
 import UploadPage from "./page";
 
@@ -35,7 +41,14 @@ const upload = {
   createdAt: "2026-01-01T00:00:00.000Z",
   startedAt: "2026-01-01T00:00:00.000Z",
   finishedAt: null,
+  recomputeStartedAt: null,
+  recomputedAt: null,
 } as const;
+
+const completedSummary = {
+  expenseTotal: 10000, personalTotal: 0, uncertainCount: 0, uncertainTotal: 0,
+  estimatedSaving: 660, taxRate: 0.066, txnCount: 1, accounts: [], insights: [],
+};
 
 describe("upload status page", () => {
   beforeEach(() => {
@@ -98,6 +111,37 @@ describe("upload status page", () => {
     expect(screen.getByRole("table")).toHaveTextContent("비밀가맹점");
     expect(screen.getByRole("table")).toHaveTextContent("업무 목적");
     expect(screen.queryByRole("link", { name: "Pro 시작하기" })).not.toBeInTheDocument();
+  });
+
+  it("offers recomputation above the disclaimer on a completed report", async () => {
+    getUploadForUser.mockResolvedValue({ ...upload, status: "completed", rowCount: 1, summary: completedSummary });
+    render(await UploadPage({ params: Promise.resolve({ id: "upload-1" }) }));
+    const button = screen.getByRole("button", { name: "다시 계산하기" });
+    const disclaimer = screen.getByText(/본 서비스는 세무 자문이 아니며/);
+    expect(button.compareDocumentPosition(disclaimer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // 원본이 파기된 뒤에는 누를 수 있는 버튼을 보여 줘도 409 만 돌아온다.
+  it.each([
+    [{ storagePath: null }, "a discarded original"],
+    [{ expiresAt: "2020-01-01T00:00:00.000Z" }, "an expired original"],
+  ])("hides recomputation for %s", async (overrides) => {
+    getUploadForUser.mockResolvedValue({
+      ...upload, status: "completed", rowCount: 1, summary: completedSummary, ...overrides,
+    });
+    render(await UploadPage({ params: Promise.resolve({ id: "upload-1" }) }));
+    expect(screen.queryByRole("button", { name: "다시 계산하기" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the stored report visible while a recompute is running", async () => {
+    getUploadForUser.mockResolvedValue({
+      ...upload, status: "completed", rowCount: 1, summary: completedSummary,
+      recomputeStartedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    render(await UploadPage({ params: Promise.resolve({ id: "upload-1" }) }));
+    expect(screen.getByText(/완료될 때까지 기존 결과가 그대로 표시됩니다/)).toBeInTheDocument();
+    expect(screen.getByText("예상 절감액(참고용)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "다시 계산하기" })).not.toBeInTheDocument();
   });
 
   it("uses notFound for an unknown or another user's upload", async () => {

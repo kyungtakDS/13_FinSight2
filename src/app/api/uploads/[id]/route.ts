@@ -4,6 +4,7 @@ import {
   deleteOriginalForUser,
   getProfilePlan,
   getUploadForUser,
+  isRecomputing,
 } from "@/lib/supabase/service";
 import type { ClassifiedTxn } from "@/types/transaction";
 
@@ -87,6 +88,10 @@ export async function GET(req: Request, ctx: RouteContext): Promise<Response> {
       status: upload.status,
       report,
       canRetry: Boolean(upload.storagePath) && new Date(upload.expiresAt).getTime() > Date.now(),
+      // 재계산이 도는 동안에도 status 는 completed 다. 화면이 폴링을 언제 멈출지
+      // 알려면 이 플래그가 있어야 한다.
+      recomputing: isRecomputing(upload.recomputeStartedAt),
+      recomputed_at: upload.recomputedAt,
     });
   } catch {
     console.error(JSON.stringify({ event: "upload_detail_failed", code: "upstream" }));

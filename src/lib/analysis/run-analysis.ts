@@ -22,6 +22,8 @@ import {
   downloadOriginalForUser,
   getUploadForUser,
   insertTransactionsForUser,
+  releaseUploadRecompute,
+  replaceUploadResultForUser,
   updateUploadForUser,
 } from "@/lib/supabase/service";
 import {
@@ -285,11 +287,22 @@ function verdictCounts(verdicts: readonly Verdict[]): Record<Verdict, number> {
   return counts;
 }
 
+type RunAnalysisOptions = {
+  /**
+   * 이미 completed 인 업로드를 다시 계산한다. 최초 분석과 다른 점은 결과를 언제
+   * 쓰느냐 하나다 — 새 결과가 나온 뒤에만 기존 결과를 통째로 교체하고, 실패하면
+   * 아무것도 건드리지 않는다.
+   */
+  recompute?: boolean;
+};
+
 /** Runs one upload inside Next.js after(); all failures are persisted and swallowed. */
 export async function runAnalysis(
   userId: string,
   uploadId: string,
+  options?: RunAnalysisOptions,
 ): Promise<void> {
+  const recompute = options?.recompute === true;
   let stage: Stage = "load";
   // 0 은 "0행을 정규화했다" 는 측정값처럼 읽힌다. 정규화에 도달하지 못했으면
   // 측정 자체가 없었다는 뜻이라 null 이어야 한다.
@@ -298,7 +311,8 @@ export async function runAnalysis(
 
   try {
     const upload = await getUploadForUser(userId, uploadId);
-    if (!upload || upload.status === "completed") return;
+    if (!upload) return;
+    if (upload.status === "completed" && !recompute) return;
     expired = Date.parse(upload.expiresAt) <= Date.now();
 
     const bytes = await downloadOriginalForUser(userId, upload.storagePath);
@@ -429,10 +443,21 @@ export async function runAnalysis(
       }),
     );
     stage = "persist";
-    await deleteTransactionsForUser(userId, uploadId);
-    await insertTransactionsForUser(userId, uploadId, classified);
     const summary = aggregate(classified, excluded, statusUnresolved, skipped);
     const period = txnPeriod(classified);
+    // 재계산은 새 결과가 손에 들어온 뒤에야 기존 결과를 건드린다. 먼저 지우면
+    // 그 사이의 실패가 사용자에게서 멀쩡한 보고서를 빼앗는다.
+    if (recompute) {
+      await replaceUploadResultForUser(userId, uploadId, classified, {
+        summary,
+        periodStart: period.start,
+        periodEnd: period.end,
+        rowCount: classified.length,
+      });
+      return;
+    }
+    await deleteTransactionsForUser(userId, uploadId);
+    await insertTransactionsForUser(userId, uploadId, classified);
     await updateUploadForUser(userId, uploadId, {
       status: "completed",
       errorCode: null,
@@ -450,6 +475,7 @@ export async function runAnalysis(
       JSON.stringify({
         event: "analysis_failed",
         uploadId,
+        ...(recompute ? { recompute: true } : {}),
         code,
         rowCount,
         stage,
@@ -463,13 +489,20 @@ export async function runAnalysis(
       }),
     );
     try {
-      await updateUploadForUser(userId, uploadId, {
-        status: "failed",
-        errorCode: code,
-        errorDetail: detail,
-        rowCount,
-        finishedAt: new Date().toISOString(),
-      });
+      // 재계산 실패는 저장된 결과를 건드리지 않는다. status·summary·error_code·
+      // retry_count 를 그대로 두고 잠금만 푼다 — 사용자가 보던 보고서는 그대로고,
+      // 실패한 재계산이 멀쩡한 업로드를 failed 로 떨어뜨리지도 않는다.
+      if (recompute) {
+        await releaseUploadRecompute(userId, uploadId);
+      } else {
+        await updateUploadForUser(userId, uploadId, {
+          status: "failed",
+          errorCode: code,
+          errorDetail: detail,
+          rowCount,
+          finishedAt: new Date().toISOString(),
+        });
+      }
     } catch (recordError) {
       // after() 는 절대 reject 하면 안 되지만, 조용히 삼키면 업로드가 processing
       // 에 영원히 갇힌 채 이유가 남지 않는다.

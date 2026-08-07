@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/supabase/server", () => ({ getUser: mocks.getUser, createClient: mocks.createClient }));
-vi.mock("@/lib/supabase/service", () => ({
+// isRecomputing 은 15분 잠금 창을 CAS 와 한 곳에서 정의한다. mock 으로 갈아치우면
+// 그 창이 응답에 실제로 반영되는지 검증할 수 없다.
+vi.mock("@/lib/supabase/service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/supabase/service")>()),
   getUploadForUser: mocks.getUploadForUser,
   getProfilePlan: mocks.getProfilePlan,
   deleteOriginalForUser: mocks.deleteOriginalForUser,
@@ -27,7 +30,8 @@ function upload(overrides: Record<string, unknown> = {}) {
     fileHash: "hash", status: "completed", errorCode: null, retryCount: 0, periodStart: "2026-01-01",
     periodEnd: "2026-01-31", rowCount: 1, summary, expiresAt: "2099-01-01T00:00:00.000Z",
     createdAt: "2026-01-01T00:00:00.000Z", startedAt: "2026-01-01T00:00:00.000Z",
-    finishedAt: "2026-01-01T00:01:00.000Z", ...overrides };
+    finishedAt: "2026-01-01T00:01:00.000Z", recomputeStartedAt: null, recomputedAt: null,
+    ...overrides };
 }
 
 function chain(terminal: () => unknown) {
@@ -128,6 +132,39 @@ describe("/api/uploads/[id]", () => {
     mocks.getUploadForUser.mockResolvedValue(upload({ storagePath: null }));
     const { DELETE } = await import("./route"); expect((await DELETE(req("DELETE"), ctx)).status).toBe(204);
     expect(mocks.deleteOriginalForUser).not.toHaveBeenCalled(); expect(mocks.from).toHaveBeenCalledWith("uploads");
+  });
+
+  it("23. keeps the completed response contract while adding recompute fields", async () => {
+    const { GET } = await import("./route");
+    const json = await (await GET(req(), ctx)).json();
+    expect(Object.keys(json).sort()).toEqual(
+      ["canRetry", "id", "recomputed_at", "recomputing", "report", "status"],
+    );
+    expect(json.recomputing).toBe(false);
+    expect(json.recomputed_at).toBeNull();
+  });
+
+  it("24. reports an in-flight recompute and the last recompute time", async () => {
+    mocks.getUploadForUser.mockResolvedValue(upload({
+      recomputeStartedAt: new Date(Date.now() - 60_000).toISOString(),
+      recomputedAt: "2026-02-01T00:00:00.000Z",
+    }));
+    const { GET } = await import("./route");
+    const json = await (await GET(req(), ctx)).json();
+    expect(json.recomputing).toBe(true);
+    expect(json.recomputed_at).toBe("2026-02-01T00:00:00.000Z");
+    expect(json.status).toBe("completed");
+    expect(json.report.summary.expenseTotal).toBe(1000);
+  });
+
+  // 잠금이 15분을 넘기면 새 재계산을 걸 수 있다. 그때까지 '재계산 중'이라고
+  // 답하면 화면은 영원히 돌아오지 않는 결과를 기다린다.
+  it("25. does not report a stale recompute lock as running", async () => {
+    mocks.getUploadForUser.mockResolvedValue(upload({
+      recomputeStartedAt: "2020-01-01T00:00:00.000Z",
+    }));
+    const { GET } = await import("./route");
+    expect((await (await GET(req(), ctx)).json()).recomputing).toBe(false);
   });
 
   it("22. logs metadata only, without filename or merchant", async () => {

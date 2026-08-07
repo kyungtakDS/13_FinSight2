@@ -58,6 +58,10 @@ export interface UploadRow {
   createdAt: string;
   startedAt: string;
   finishedAt: string | null;
+  /** 진행 중인 재계산의 선점 시각. 15분이 지나면 죽은 잠금으로 본다. */
+  recomputeStartedAt: string | null;
+  /** 마지막 재계산 성공 시각. 최초 분석만 거친 업로드는 null 이다. */
+  recomputedAt: string | null;
 }
 
 /** 과거 업로드 목록에 필요한 식별 정보. */

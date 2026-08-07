@@ -23,6 +23,8 @@ type UploadDatabaseRow = {
   created_at: string;
   started_at: string;
   finished_at: string | null;
+  recompute_started_at: string | null;
+  recomputed_at: string | null;
 };
 
 function requireEnv(name: string): string {
@@ -58,6 +60,8 @@ function toUploadRow(row: UploadDatabaseRow): UploadRow {
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    recomputeStartedAt: row.recompute_started_at ?? null,
+    recomputedAt: row.recomputed_at ?? null,
   };
 }
 
@@ -180,6 +184,104 @@ export async function claimUploadRetry(
     throw error;
   }
   return (data ?? []).length > 0;
+}
+
+/** 재계산 잠금의 유효 기간. 이보다 오래된 선점은 죽은 것으로 본다. */
+export const RECOMPUTE_LOCK_MS = 15 * 60 * 1000;
+
+/**
+ * 15분 창 안의 선점만 '재계산 중'이다. 창을 두지 않으면 분석이 죽었을 때 잠금이
+ * 영원히 남아, 화면은 돌아오지 않는 결과를 기다리고 버튼도 다시 나오지 않는다.
+ */
+export function isRecomputing(startedAt: string | null): boolean {
+  return (
+    startedAt !== null && Date.parse(startedAt) > Date.now() - RECOMPUTE_LOCK_MS
+  );
+}
+
+/**
+ * 재계산 슬롯을 선점한다. claimUploadRetry 와 같은 비교-교환이지만 status 는
+ * completed 그대로 두고 retry_count 도 건드리지 않는다 — 재계산은 실패 복구가
+ * 아니므로 실패 재시도 한도를 소모하면 안 된다.
+ * 갱신된 행이 없으면 다른 재계산이 이미 돌고 있다는 뜻이므로 false.
+ */
+export async function claimUploadRecompute(
+  userId: string,
+  uploadId: string,
+): Promise<boolean> {
+  const startedAt = new Date();
+  const staleBefore = new Date(startedAt.getTime() - RECOMPUTE_LOCK_MS);
+  const { data, error } = await createServiceClient()
+    .from("uploads")
+    .update({ recompute_started_at: startedAt.toISOString() })
+    .eq("user_id", userId)
+    .eq("id", uploadId)
+    .eq("status", "completed")
+    .or(
+      `recompute_started_at.is.null,recompute_started_at.lt.${staleBefore.toISOString()}`,
+    )
+    .select("id");
+
+  if (error) {
+    throw error;
+  }
+  return (data ?? []).length > 0;
+}
+
+/** 끝나지 못한 재계산의 잠금만 푼다. 저장된 결과는 그대로 둔다. */
+export async function releaseUploadRecompute(
+  userId: string,
+  uploadId: string,
+): Promise<void> {
+  const { error } = await createServiceClient()
+    .from("uploads")
+    .update({ recompute_started_at: null })
+    .eq("user_id", userId)
+    .eq("id", uploadId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+type UploadResult = Pick<
+  UploadRow,
+  "summary" | "periodStart" | "periodEnd" | "rowCount"
+>;
+
+/**
+ * 새 결과로 기존 결과를 통째로 갈아 끼운다. delete → insert → uploads update 를
+ * 0007 의 plpgsql 함수가 한 트랜잭션으로 감싸므로, 중간에 실패해도 반쯤 갈아엎힌
+ * 결과가 남지 않는다.
+ */
+export async function replaceUploadResultForUser(
+  userId: string,
+  uploadId: string,
+  rows: ClassifiedTxn[],
+  result: UploadResult,
+): Promise<void> {
+  const { error } = await createServiceClient().rpc("replace_upload_result", {
+    p_user_id: userId,
+    p_upload_id: uploadId,
+    // 소유권은 인자에서만 온다. 행마다 user_id 를 실으면 남의 업로드에 거래를
+    // 꽂을 수 있는 자리가 생긴다.
+    p_transactions: rows.map((row) => ({
+      row_index: row.rowIndex,
+      txn_date: row.txnDate,
+      merchant: row.merchant,
+      amount: row.amount,
+      account_code: row.accountCode,
+      verdict: row.verdict,
+    })),
+    p_summary: result.summary,
+    p_period_start: result.periodStart,
+    p_period_end: result.periodEnd,
+    p_row_count: result.rowCount,
+  });
+
+  if (error) {
+    throw error;
+  }
 }
 
 export async function insertTransactionsForUser(
